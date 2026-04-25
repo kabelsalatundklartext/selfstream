@@ -177,6 +177,8 @@ tr:hover td{background:rgba(255,255,255,.02);}
 .ch-card:active{cursor:grabbing;}
 .ch-card.dragging{opacity:.35;border-color:var(--teal);}
 .ch-card.drag-over{border-color:var(--teal);border-style:dashed;background:rgba(0,229,200,.04);}
+[id^="ugrow-"].dragging{opacity:.35;border-color:var(--teal) !important;}
+[id^="ugrow-"].drag-over{border-color:var(--teal) !important;border-style:dashed !important;background:rgba(0,229,200,.04);}
 .ch-card.disabled{opacity:.38;}
 .ch-logo{width:26px;height:26px;object-fit:contain;flex-shrink:0;border-radius:2px;}
 .ch-ph{width:26px;height:26px;background:var(--bg3);border-radius:2px;
@@ -1135,9 +1137,18 @@ async function loadUserGroups() {
     wrap.innerHTML = '<div class="empty-state">Keine Gruppen. Oben eine anlegen.</div>';
     return;
   }
-  wrap.innerHTML = groups.map(g => `
-    <div class="table-wrap" style="margin-bottom:16px;">
+  let _ugDragId = null;
+  let _ugOrder = groups.map(g => g.id);
+
+  wrap.innerHTML = groups.map((g, idx) => `
+    <div class="table-wrap" id="ugrow-${g.id}" style="margin-bottom:12px;cursor:grab;"
+         draggable="true"
+         ondragstart="ugDragStart(event,${g.id})"
+         ondragover="ugDragOver(event,${g.id})"
+         ondrop="ugDrop(event,${g.id})"
+         ondragend="ugDragEnd()">
       <div style="display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--border);background:var(--bg2);">
+        <span style="color:var(--text2);cursor:grab;font-size:16px;flex-shrink:0;" title="Ziehen zum Sortieren">⠿</span>
         <span style="font-weight:700;font-size:14px;">${esc(g.name)}</span>
         <span style="font-family:var(--mono);font-size:10px;color:var(--text2);">${g.channel_count} Kanäle</span>
         <div style="margin-left:auto;display:flex;gap:6px;">
@@ -1150,6 +1161,39 @@ async function loadUserGroups() {
       </div>
     </div>
   `).join('');
+
+  // Drag & Drop handlers scoped to this render
+  window.ugDragStart = (e, id) => {
+    _ugDragId = id;
+    setTimeout(() => document.getElementById('ugrow-'+id)?.classList.add('dragging'), 0);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+  window.ugDragOver = (e, id) => {
+    e.preventDefault();
+    document.getElementById('ugrow-'+id)?.classList.add('drag-over');
+  };
+  window.ugDragEnd = () => {
+    document.querySelectorAll('[id^="ugrow-"]').forEach(el => el.classList.remove('dragging','drag-over'));
+  };
+  window.ugDrop = async (e, targetId) => {
+    e.preventDefault();
+    ugDragEnd();
+    if (_ugDragId === targetId) return;
+    const fromIdx = _ugOrder.indexOf(_ugDragId);
+    const toIdx = _ugOrder.indexOf(targetId);
+    if (fromIdx < 0 || toIdx < 0) return;
+    _ugOrder.splice(fromIdx, 1);
+    _ugOrder.splice(toIdx, 0, _ugDragId);
+    // Reorder DOM
+    const wrap2 = document.getElementById('ugroups-list');
+    _ugOrder.forEach(id => {
+      const el = document.getElementById('ugrow-'+id);
+      if (el) wrap2.appendChild(el);
+    });
+    // Save to backend
+    await api('POST', '/api/user-groups/reorder', {ordered_ids: _ugOrder});
+    showToast('Reihenfolge gespeichert');
+  };
 
   // Load channel previews for each group
   for (const g of groups) {
