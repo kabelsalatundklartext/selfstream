@@ -122,6 +122,7 @@ class Database:
                 CREATE TABLE IF NOT EXISTS user_groups (
                     id         INTEGER PRIMARY KEY AUTOINCREMENT,
                     name       TEXT UNIQUE NOT NULL,
+                    sort_order INTEGER DEFAULT 0,
                     created_at TEXT DEFAULT (datetime('now'))
                 );
 
@@ -150,7 +151,7 @@ class Database:
                 SELECT ug.*, COUNT(ugc.channel_id) as channel_count
                 FROM user_groups ug
                 LEFT JOIN user_group_channels ugc ON ugc.group_id = ug.id
-                GROUP BY ug.id ORDER BY ug.name
+                GROUP BY ug.id ORDER BY ug.sort_order, ug.name
             """).fetchall()
             return [dict(r) for r in rows]
 
@@ -167,6 +168,11 @@ class Database:
     def rename_user_group(self, group_id: int, name: str):
         with self.conn() as con:
             con.execute("UPDATE user_groups SET name = ? WHERE id = ?", (name, group_id))
+
+    def reorder_user_groups(self, ordered_ids: List[int]):
+        with self.conn() as con:
+            for i, gid in enumerate(ordered_ids):
+                con.execute("UPDATE user_groups SET sort_order = ? WHERE id = ?", (i, gid))
 
     def get_user_group_channels(self, group_id: int) -> List[int]:
         with self.conn() as con:
@@ -650,9 +656,14 @@ class Database:
                     CREATE TABLE IF NOT EXISTS user_groups (
                         id         INTEGER PRIMARY KEY AUTOINCREMENT,
                         name       TEXT UNIQUE NOT NULL,
+                        sort_order INTEGER DEFAULT 0,
                         created_at TEXT DEFAULT (datetime('now'))
                     )
                 """)
+                # add sort_order to user_groups if missing
+                ug_cols = [r[1] for r in con.execute("PRAGMA table_info(user_groups)").fetchall()]
+                if "sort_order" not in ug_cols:
+                    con.execute("ALTER TABLE user_groups ADD COLUMN sort_order INTEGER DEFAULT 0")
                 con.execute("""
                     CREATE TABLE IF NOT EXISTS user_group_channels (
                         group_id   INTEGER NOT NULL,

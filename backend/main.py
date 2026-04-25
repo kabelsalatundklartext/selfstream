@@ -1155,6 +1155,12 @@ def delete_user_group(group_id: int, _=Depends(check_admin)):
     db.delete_user_group(group_id)
     return {"ok": True}
 
+@admin_app.post("/api/user-groups/reorder")
+def reorder_user_groups(body: dict, _=Depends(check_admin)):
+    ordered_ids = body.get("ordered_ids", [])
+    db.reorder_user_groups([int(i) for i in ordered_ids])
+    return {"ok": True}
+
 @admin_app.get("/api/user-groups/{group_id}/channels")
 def get_user_group_channels(group_id: int, _=Depends(check_admin)):
     return db.get_user_group_channels(group_id)
