@@ -285,12 +285,21 @@ async def serve_playlist(token: str):
         provider_groups = [g for g in group_names if g not in all_user_group_names]
         result_channels = []
 
-        # Channels from custom user groups — override group_title with user group name
+        # Get sort_order for custom groups to prefix group-title for IPTV app ordering
+        all_user_groups = {g["name"]: g["sort_order"] for g in db.get_user_groups()}
+        use_prefix = db.get_setting("group_sort_prefix", "1") == "1"
+
+        # Channels from custom user groups — override group_title with sorted name
         for ug_name in custom_groups:
             ug_channels = db.get_channels_for_user_groups([ug_name])
+            sort_idx = all_user_groups.get(ug_name, 99)
+            if use_prefix:
+                display_name = f"{sort_idx + 1:02d}. {ug_name}"
+            else:
+                display_name = ug_name
             for ch in ug_channels:
                 ch = dict(ch)
-                ch["group_title"] = ug_name  # show custom group name in IPTV app
+                ch["group_title"] = display_name
                 result_channels.append(ch)
 
         # Channels from provider groups (by group_title) — keep original group_title
@@ -1542,7 +1551,7 @@ def update_settings(body: dict, _=Depends(check_admin)):
                "hls_timeout", "hls_read_timeout", "hls_chunk_size",
                "hls_user_agent", "hls_referer", "hls_follow_redirects",
                "epg_refresh_hours", "epg_filter_channels", "log_retention_days",
-               "short_domain", "m3u_refresh_hours"}
+               "short_domain", "m3u_refresh_hours", "group_sort_prefix"}
     for key, val in body.items():
         if key in allowed:
             db.set_setting(key, str(val))
