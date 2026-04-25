@@ -279,8 +279,27 @@ async def serve_playlist(token: str):
     # Filter by user's allowed_groups if set
     allowed_groups_raw = user.get("allowed_groups", "") or ""
     if allowed_groups_raw.strip():
-        allowed = {g.strip() for g in allowed_groups_raw.split(",") if g.strip()}
-        channels = [c for c in channels if c.get("group_title", "") in allowed]
+        group_names = [g.strip() for g in allowed_groups_raw.split(",") if g.strip()]
+        # Check if any of the allowed groups are custom user groups
+        all_user_group_names = set(db.get_all_user_group_names())
+        custom_groups = [g for g in group_names if g in all_user_group_names]
+        provider_groups = [g for g in group_names if g not in all_user_group_names]
+        result_channels = []
+        # Channels from custom user groups
+        if custom_groups:
+            result_channels.extend(db.get_channels_for_user_groups(custom_groups))
+        # Channels from provider groups (by group_title)
+        if provider_groups:
+            provider_set = set(provider_groups)
+            result_channels.extend([c for c in channels if c.get("group_title", "") in provider_set])
+        # Deduplicate by channel id
+        seen = set()
+        channels = []
+        for c in result_channels:
+            cid = c.get("id")
+            if cid not in seen:
+                seen.add(cid)
+                channels.append(c)
 
     content = build_m3u(channels, proxy_url, token, epg_sources)
     db.log_playlist_access(user["id"])
@@ -1099,6 +1118,58 @@ def delete_group_mapping(body: dict, _=Depends(check_admin)):
     if not original_name:
         raise HTTPException(status_code=400, detail="original_name required")
     db.delete_group_mapping(original_name)
+    return {"ok": True}
+
+# ── User Group CRUD ────────────────────────────────────────────────────────────
+
+@admin_app.get("/api/user-groups")
+def list_user_groups(_=Depends(check_admin)):
+    return db.get_user_groups()
+
+@admin_app.post("/api/user-groups")
+def create_user_group(body: dict, _=Depends(check_admin)):
+    name = body.get("name", "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name required")
+    try:
+        return db.create_user_group(name)
+    except Exception:
+        raise HTTPException(status_code=409, detail="Group already exists")
+
+@admin_app.put("/api/user-groups/{group_id}")
+def update_user_group(group_id: int, body: dict, _=Depends(check_admin)):
+    name = body.get("name", "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name required")
+    db.rename_user_group(group_id, name)
+    return {"ok": True}
+
+@admin_app.delete("/api/user-groups/{group_id}")
+def delete_user_group(group_id: int, _=Depends(check_admin)):
+    db.delete_user_group(group_id)
+    return {"ok": True}
+
+@admin_app.get("/api/user-groups/{group_id}/channels")
+def get_user_group_channels(group_id: int, _=Depends(check_admin)):
+    return db.get_user_group_channels(group_id)
+
+@admin_app.post("/api/user-groups/{group_id}/channels")
+def set_user_group_channels(group_id: int, body: dict, _=Depends(check_admin)):
+    channel_ids = body.get("channel_ids", [])
+    db.set_user_group_channels(group_id, channel_ids)
+    return {"ok": True}
+
+@admin_app.post("/api/user-groups/{group_id}/channels/add")
+def add_channel_to_group(group_id: int, body: dict, _=Depends(check_admin)):
+    channel_id = body.get("channel_id")
+    if not channel_id:
+        raise HTTPException(status_code=400, detail="channel_id required")
+    db.add_channel_to_user_group(group_id, channel_id)
+    return {"ok": True}
+
+@admin_app.delete("/api/user-groups/{group_id}/channels/{channel_id}")
+def remove_channel_from_group(group_id: int, channel_id: int, _=Depends(check_admin)):
+    db.remove_channel_from_user_group(group_id, channel_id)
     return {"ok": True}
 
 @admin_app.post("/api/channels/import")

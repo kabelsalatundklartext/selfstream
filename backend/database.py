@@ -118,6 +118,22 @@ class Database:
                     created_at    TEXT DEFAULT (datetime('now'))
                 );
 
+                -- Custom user groups (independent of provider groups)
+                CREATE TABLE IF NOT EXISTS user_groups (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name       TEXT UNIQUE NOT NULL,
+                    created_at TEXT DEFAULT (datetime('now'))
+                );
+
+                -- Channels assigned to custom user groups
+                CREATE TABLE IF NOT EXISTS user_group_channels (
+                    group_id   INTEGER NOT NULL,
+                    channel_id INTEGER NOT NULL,
+                    PRIMARY KEY (group_id, channel_id),
+                    FOREIGN KEY (group_id)   REFERENCES user_groups(id) ON DELETE CASCADE,
+                    FOREIGN KEY (channel_id) REFERENCES channels(id)    ON DELETE CASCADE
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_watch_logs_user    ON watch_logs(user_id);
                 CREATE INDEX IF NOT EXISTS idx_watch_logs_started ON watch_logs(started_at);
                 CREATE INDEX IF NOT EXISTS idx_channels_group     ON channels(group_title);
@@ -125,6 +141,84 @@ class Database:
             """)
 
     # ── Settings ──────────────────────────────────────────────────────────────
+
+    # ── User Groups ──────────────────────────────────────────────────────────────
+
+    def get_user_groups(self) -> List[Dict]:
+        with self.conn() as con:
+            rows = con.execute("""
+                SELECT ug.*, COUNT(ugc.channel_id) as channel_count
+                FROM user_groups ug
+                LEFT JOIN user_group_channels ugc ON ugc.group_id = ug.id
+                GROUP BY ug.id ORDER BY ug.name
+            """).fetchall()
+            return [dict(r) for r in rows]
+
+    def create_user_group(self, name: str) -> Dict:
+        with self.conn() as con:
+            cur = con.execute("INSERT INTO user_groups (name) VALUES (?)", (name,))
+            return {"id": cur.lastrowid, "name": name, "channel_count": 0}
+
+    def delete_user_group(self, group_id: int):
+        with self.conn() as con:
+            con.execute("DELETE FROM user_group_channels WHERE group_id = ?", (group_id,))
+            con.execute("DELETE FROM user_groups WHERE id = ?", (group_id,))
+
+    def rename_user_group(self, group_id: int, name: str):
+        with self.conn() as con:
+            con.execute("UPDATE user_groups SET name = ? WHERE id = ?", (name, group_id))
+
+    def get_user_group_channels(self, group_id: int) -> List[int]:
+        with self.conn() as con:
+            rows = con.execute(
+                "SELECT channel_id FROM user_group_channels WHERE group_id = ?", (group_id,)
+            ).fetchall()
+            return [r["channel_id"] for r in rows]
+
+    def set_user_group_channels(self, group_id: int, channel_ids: List[int]):
+        with self.conn() as con:
+            con.execute("DELETE FROM user_group_channels WHERE group_id = ?", (group_id,))
+            for cid in channel_ids:
+                try:
+                    con.execute(
+                        "INSERT OR IGNORE INTO user_group_channels (group_id, channel_id) VALUES (?, ?)",
+                        (group_id, cid)
+                    )
+                except Exception:
+                    pass
+
+    def add_channel_to_user_group(self, group_id: int, channel_id: int):
+        with self.conn() as con:
+            con.execute(
+                "INSERT OR IGNORE INTO user_group_channels (group_id, channel_id) VALUES (?, ?)",
+                (group_id, channel_id)
+            )
+
+    def remove_channel_from_user_group(self, group_id: int, channel_id: int):
+        with self.conn() as con:
+            con.execute(
+                "DELETE FROM user_group_channels WHERE group_id = ? AND channel_id = ?",
+                (group_id, channel_id)
+            )
+
+    def get_channels_for_user_groups(self, group_names: List[str]) -> List[Dict]:
+        """Get all channels that belong to any of the given user group names."""
+        with self.conn() as con:
+            placeholders = ",".join("?" * len(group_names))
+            rows = con.execute(f"""
+                SELECT DISTINCT c.*
+                FROM channels c
+                JOIN user_group_channels ugc ON ugc.channel_id = c.id
+                JOIN user_groups ug ON ug.id = ugc.group_id
+                WHERE ug.name IN ({placeholders}) AND c.enabled = 1
+                ORDER BY c.sort_order
+            """, group_names).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_all_user_group_names(self) -> List[str]:
+        with self.conn() as con:
+            rows = con.execute("SELECT name FROM user_groups ORDER BY name").fetchall()
+            return [r["name"] for r in rows]
 
     def get_m3u_refresh_due(self) -> bool:
         """Check if M3U needs refresh based on m3u_refresh_hours setting."""
@@ -549,6 +643,23 @@ class Database:
                         original_name TEXT PRIMARY KEY,
                         custom_name   TEXT NOT NULL,
                         created_at    TEXT DEFAULT (datetime('now'))
+                    )
+                """)
+                # user_groups and user_group_channels
+                con.execute("""
+                    CREATE TABLE IF NOT EXISTS user_groups (
+                        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name       TEXT UNIQUE NOT NULL,
+                        created_at TEXT DEFAULT (datetime('now'))
+                    )
+                """)
+                con.execute("""
+                    CREATE TABLE IF NOT EXISTS user_group_channels (
+                        group_id   INTEGER NOT NULL,
+                        channel_id INTEGER NOT NULL,
+                        PRIMARY KEY (group_id, channel_id),
+                        FOREIGN KEY (group_id)   REFERENCES user_groups(id) ON DELETE CASCADE,
+                        FOREIGN KEY (channel_id) REFERENCES channels(id)    ON DELETE CASCADE
                     )
                 """)
         except Exception as e:
