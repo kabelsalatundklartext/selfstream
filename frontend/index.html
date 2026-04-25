@@ -1174,8 +1174,14 @@ async function createUserGroup() {
     document.getElementById('new-ugroup-name').value = '';
     showToast(`Gruppe "${name}" angelegt`);
     loadUserGroups();
-    // Refresh group lists in user modals too
-  } catch(e) { showToast(e.message || 'Fehler', true); }
+  } catch(e) {
+    const msg = e.message || '';
+    if (msg.includes('already exists') || msg.includes('409')) {
+      showToast(`Gruppe "${name}" existiert bereits`, true);
+    } else {
+      showToast(msg || 'Fehler beim Anlegen', true);
+    }
+  }
 }
 
 async function deleteUserGroup(id, name) {
