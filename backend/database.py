@@ -111,6 +111,13 @@ class Database:
                     created_at TEXT DEFAULT (datetime('now'))
                 );
 
+                -- Group name mappings (survives M3U refresh)
+                CREATE TABLE IF NOT EXISTS group_mappings (
+                    original_name TEXT PRIMARY KEY,
+                    custom_name   TEXT NOT NULL,
+                    created_at    TEXT DEFAULT (datetime('now'))
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_watch_logs_user    ON watch_logs(user_id);
                 CREATE INDEX IF NOT EXISTS idx_watch_logs_started ON watch_logs(started_at);
                 CREATE INDEX IF NOT EXISTS idx_channels_group     ON channels(group_title);
@@ -310,16 +317,30 @@ class Database:
             return [r["group_title"] for r in rows]
 
     def upsert_channels(self, channels: List[Dict]):
-        """Replace all channels with fresh parsed list."""
+        """Replace all channels with fresh parsed list, preserving group mappings and sort order."""
         with self.conn() as con:
+            # Load existing group mappings
+            mappings = {r["original_name"]: r["custom_name"]
+                        for r in con.execute("SELECT * FROM group_mappings").fetchall()}
+            # Preserve existing sort_order and enabled state by stream_url
+            existing = {}
+            for row in con.execute("SELECT stream_url, enabled, sort_order FROM channels").fetchall():
+                existing[row["stream_url"].split("?")[0]] = {"enabled": row["enabled"], "sort_order": row["sort_order"]}
             con.execute("DELETE FROM channels")
             for i, ch in enumerate(channels):
+                orig_group = ch.get("group", "")
+                group = mappings.get(orig_group, orig_group)  # apply mapping if exists
+                url = ch["url"]
+                url_base = url.split("?")[0]
+                prev = existing.get(url_base, {})
+                enabled = prev.get("enabled", 1)
+                sort_order = prev.get("sort_order", i)
                 con.execute("""
                     INSERT INTO channels (name, group_title, tvg_id, tvg_logo, tvg_rec, stream_url, enabled, sort_order, raw_extinf)
-                    VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
-                """, (ch["name"], ch.get("group", ""), ch.get("tvg_id", ""),
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (ch["name"], group, ch.get("tvg_id", ""),
                       ch.get("tvg_logo", ""), ch.get("tvg_rec", ""),
-                      ch["url"], i, ch.get("raw_extinf", "")))
+                      url, enabled, sort_order, ch.get("raw_extinf", "")))
 
     def update_channel(self, channel_id: int, data: Dict):
         allowed = {"enabled", "sort_order", "name", "group_title"}
@@ -334,6 +355,61 @@ class Database:
     def set_group_enabled(self, group: str, enabled: int):
         with self.conn() as con:
             con.execute("UPDATE channels SET enabled = ? WHERE group_title = ?", (enabled, group))
+
+    def get_group_mappings(self) -> List[Dict]:
+        with self.conn() as con:
+            rows = con.execute("SELECT * FROM group_mappings ORDER BY original_name").fetchall()
+            return [dict(r) for r in rows]
+
+    def set_group_mapping(self, original_name: str, custom_name: str):
+        """Map original group name to custom name. Applies immediately to all channels."""
+        with self.conn() as con:
+            if custom_name.strip() and custom_name.strip() != original_name:
+                con.execute("""
+                    INSERT INTO group_mappings (original_name, custom_name)
+                    VALUES (?, ?)
+                    ON CONFLICT(original_name) DO UPDATE SET custom_name = excluded.custom_name
+                """, (original_name, custom_name.strip()))
+                # Apply immediately to existing channels
+                con.execute("UPDATE channels SET group_title = ? WHERE group_title = ?",
+                            (custom_name.strip(), original_name))
+                # Also update if previously mapped
+                old_rows = con.execute(
+                    "SELECT original_name FROM group_mappings WHERE custom_name = ?", (original_name,)
+                ).fetchall()
+                for r in old_rows:
+                    con.execute("UPDATE channels SET group_title = ? WHERE group_title = ?",
+                                (custom_name.strip(), r["original_name"]))
+            else:
+                # Remove mapping (revert to original)
+                con.execute("DELETE FROM group_mappings WHERE original_name = ?", (original_name,))
+                con.execute("UPDATE channels SET group_title = ? WHERE group_title = ?",
+                            (original_name, original_name))
+
+    def delete_group_mapping(self, original_name: str):
+        """Remove mapping and revert channels to original group name."""
+        with self.conn() as con:
+            con.execute("DELETE FROM group_mappings WHERE original_name = ?", (original_name,))
+            con.execute("UPDATE channels SET group_title = ? WHERE group_title IN (SELECT custom_name FROM group_mappings WHERE original_name = ?)",
+                        (original_name, original_name))
+
+    def rename_group(self, old_name: str, new_name: str):
+        """Rename a group in channels table and update/create mapping."""
+        with self.conn() as con:
+            con.execute("UPDATE channels SET group_title = ? WHERE group_title = ?", (new_name, old_name))
+            # Find original name for this group
+            mapping = con.execute(
+                "SELECT original_name FROM group_mappings WHERE custom_name = ?", (old_name,)
+            ).fetchone()
+            original = mapping["original_name"] if mapping else old_name
+            if new_name != original:
+                con.execute("""
+                    INSERT INTO group_mappings (original_name, custom_name)
+                    VALUES (?, ?)
+                    ON CONFLICT(original_name) DO UPDATE SET custom_name = excluded.custom_name
+                """, (original, new_name))
+            else:
+                con.execute("DELETE FROM group_mappings WHERE original_name = ?", (original,))
 
     def get_channel_by_name(self, name: str) -> Optional[Dict]:
         with self.conn() as con:
@@ -467,6 +543,14 @@ class Database:
                 u_cols = [r[1] for r in con.execute("PRAGMA table_info(users)").fetchall()]
                 if "allowed_groups" not in u_cols:
                     con.execute("ALTER TABLE users ADD COLUMN allowed_groups TEXT DEFAULT NULL")
+                # group_mappings table
+                con.execute("""
+                    CREATE TABLE IF NOT EXISTS group_mappings (
+                        original_name TEXT PRIMARY KEY,
+                        custom_name   TEXT NOT NULL,
+                        created_at    TEXT DEFAULT (datetime('now'))
+                    )
+                """)
         except Exception as e:
             import logging
             logging.getLogger(__name__).warning(f"migrate: {e}")

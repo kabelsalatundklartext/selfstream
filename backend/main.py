@@ -1080,6 +1080,27 @@ def toggle_group(body: dict, _=Depends(check_admin)):
     db.set_group_enabled(body.get("group", ""), int(body.get("enabled", 1)))
     return {"ok": True}
 
+@admin_app.get("/api/channels/group-mappings")
+def get_group_mappings(_=Depends(check_admin)):
+    return db.get_group_mappings()
+
+@admin_app.post("/api/channels/group-rename")
+def rename_group(body: dict, _=Depends(check_admin)):
+    old_name = body.get("old_name", "").strip()
+    new_name = body.get("new_name", "").strip()
+    if not old_name or not new_name:
+        raise HTTPException(status_code=400, detail="old_name and new_name required")
+    db.rename_group(old_name, new_name)
+    return {"ok": True}
+
+@admin_app.post("/api/channels/group-mapping-delete")
+def delete_group_mapping(body: dict, _=Depends(check_admin)):
+    original_name = body.get("original_name", "").strip()
+    if not original_name:
+        raise HTTPException(status_code=400, detail="original_name required")
+    db.delete_group_mapping(original_name)
+    return {"ok": True}
+
 @admin_app.post("/api/channels/import")
 async def import_channels(body: dict, _=Depends(check_admin)):
     url = body.get("url", "").strip()
