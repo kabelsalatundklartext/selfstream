@@ -316,16 +316,19 @@ async def serve_playlist(token: str):
                 seen.add(cid)
                 channels.append(c)
 
-    # Sort channels so groups appear in consistent order in IPTV app
-    # Group order is determined by first appearance of group prefix (01., 02., etc.)
-    # or alphabetically for provider groups
+    # Sort channels: use unified saved order (covers both custom and provider groups)
+    _saved_order = db.get_provider_group_order()
+
     def _group_sort_key(ch):
         gt = ch.get("group_title", "")
-        # Numeric prefix like "01. Kinder" → sort by number
-        import re as _re
-        m = _re.match(r"^([0-9]+)\.", gt)
-        if m:
-            return (0, int(m.group(1)), gt)
+        # Strip numeric prefix like "01. Kinder" to get base name for lookup
+        m = re.match(r"^[0-9]+\.\s*(.+)$", gt)
+        base = m.group(1) if m else gt
+        # Check saved order by display name or base name
+        if gt in _saved_order:
+            return (0, _saved_order[gt], gt)
+        if base in _saved_order:
+            return (0, _saved_order[base], gt)
         return (1, 0, gt)
 
     channels.sort(key=_group_sort_key)
@@ -1195,6 +1198,17 @@ def reorder_user_groups(body: dict, _=Depends(check_admin)):
     ordered_ids = body.get("ordered_ids", [])
     db.reorder_user_groups([int(i) for i in ordered_ids])
     return {"ok": True}
+
+@admin_app.get("/api/channels/provider-group-order")
+def get_provider_group_order(_=Depends(check_admin)):
+    return db.get_provider_group_order()
+
+@admin_app.post("/api/channels/provider-group-order")
+def set_provider_group_order(body: dict, _=Depends(check_admin)):
+    ordered_names = body.get("ordered_names", [])
+    db.set_provider_group_order(ordered_names)
+    return {"ok": True}
+
 
 @admin_app.get("/api/user-groups/{group_id}/channels")
 def get_user_group_channels(group_id: int, _=Depends(check_admin)):
