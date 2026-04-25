@@ -552,6 +552,17 @@ tr:hover td{background:rgba(255,255,255,.02);}
               <label class="form-label">M3U Quell-URL</label>
               <input class="form-input" id="cfg-m3u" placeholder="http://anbieter.tv/playlist.m3u">
             </div>
+            <div class="form-group">
+              <label class="form-label">M3U Auto-Refresh</label>
+              <select class="form-select" id="cfg-m3u-refresh">
+                <option value="0">Deaktiviert</option>
+                <option value="6">Alle 6 Stunden</option>
+                <option value="12">Alle 12 Stunden</option>
+                <option value="24">Alle 24 Stunden</option>
+                <option value="48">Alle 48 Stunden</option>
+              </select>
+              <div class="form-hint" id="cfg-m3u-last-refresh"></div>
+            </div>
             <button class="btn primary" onclick="saveUrls()">Speichern</button>
           </div>
 
@@ -617,6 +628,13 @@ tr:hover td{background:rgba(255,255,255,.02);}
       </select>
       <div class="form-hint">Verhindert Weitergabe des Links.</div>
     </div>
+    <div class="form-group">
+      <label class="form-label">Erlaubte Kanalgruppen (optional)</label>
+      <div id="nu-groups-wrap" style="max-height:160px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:8px;background:var(--bg2);">
+        <div style="font-size:11px;color:var(--text2);">Kanäle werden nach Import geladen…</div>
+      </div>
+      <div class="form-hint">Leer lassen = alle Gruppen erlaubt. Auswahl = nur diese Gruppen in der Playlist.</div>
+    </div>
     <div class="modal-actions">
       <button class="btn" onclick="closeM('modal-adduser')">Abbrechen</button>
       <button class="btn primary" onclick="addUser()">Erstellen</button>
@@ -636,6 +654,21 @@ tr:hover td{background:rgba(255,255,255,.02);}
     <div class="modal-actions">
       <button class="btn" onclick="closeM('modal-import')">Abbrechen</button>
       <button class="btn primary" id="import-btn" onclick="doImport()">Importieren</button>
+    </div>
+  </div>
+</div>
+
+<!-- User Groups Modal -->
+<div class="modal-bg" id="modal-ugroups">
+  <div class="modal" style="width:600px;max-width:95vw;">
+    <div class="modal-title" id="ugroups-title">Kanalgruppen · User</div>
+    <p style="font-size:12px;color:var(--text2);margin-bottom:12px;">Leer lassen = alle Gruppen erlaubt. Auswahl = nur diese Gruppen in der Playlist sichtbar.</p>
+    <div id="ugroups-content" style="max-height:400px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:8px;background:var(--bg2);">
+      <div class="empty-state">Lädt…</div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeM('modal-ugroups')">Abbrechen</button>
+      <button class="btn primary" id="ugroups-save-btn">Speichern</button>
     </div>
   </div>
 </div>
@@ -850,6 +883,7 @@ async function loadUsers() {
       <td style="font-family:var(--mono);font-size:10px;">${timeAgo(u.last_seen)}</td>
       <td>
         <div class="action-cell">
+          <button class="btn sm" onclick="userGroups(${u.id},'${esc(u.name)}','${esc(u.allowed_groups||'')}')" title="Kanalgruppen verwalten">🔒 Gruppen</button>
           <button class="btn sm" onclick="userLogs(${u.id},'${esc(u.name)}')">Log</button>
           <button class="btn sm" onclick="regenToken(${u.id},'${esc(u.name)}')" title="Neuen Token generieren (alte URL wird ungültig)">🔄 Token</button>
           <button class="btn sm" onclick="toggleUser(${u.id},${u.active})">${u.active?'Sperren':'Freigeben'}</button>
@@ -890,15 +924,60 @@ async function doCopy(url, btn) {
   }
 }
 
-function openAddUser(){ document.getElementById('modal-adduser').classList.add('open'); }
+async function openAddUser(){
+  document.getElementById('modal-adduser').classList.add('open');
+  // Load groups for checkbox list
+  const wrap=document.getElementById('nu-groups-wrap');
+  try {
+    const groups=await api('GET','/api/channels/groups');
+    if(!groups||!groups.length){
+      wrap.innerHTML='<div style="font-size:11px;color:var(--text2);">Noch keine Kanäle importiert.</div>';
+    } else {
+      wrap.innerHTML=groups.map(g=>`<label style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:12px;cursor:pointer;">
+        <input type="checkbox" value="${esc(g)}" style="accent-color:var(--teal);">
+        <span>${esc(g)}</span>
+      </label>`).join('');
+    }
+  } catch(e){ wrap.innerHTML='<div style="font-size:11px;color:var(--text2);">Fehler beim Laden.</div>'; }
+}
+
+async function userGroups(id, name, currentGroups){
+  document.getElementById('ugroups-title').textContent=`Kanalgruppen · ${name}`;
+  document.getElementById('modal-ugroups').classList.add('open');
+  const wrap=document.getElementById('ugroups-content');
+  wrap.innerHTML='<div class="empty-state">Lädt…</div>';
+  try {
+    const groups=await api('GET','/api/channels/groups');
+    const selected=new Set((currentGroups||'').split(',').map(g=>g.trim()).filter(Boolean));
+    if(!groups||!groups.length){
+      wrap.innerHTML='<div class="empty-state">Noch keine Kanäle importiert.</div>';
+    } else {
+      wrap.innerHTML=groups.map(g=>`<label style="display:flex;align-items:center;gap:8px;padding:5px 0;font-size:12px;cursor:pointer;border-bottom:1px solid var(--border);">
+        <input type="checkbox" value="${esc(g)}" ${selected.has(g)?'checked':''} style="accent-color:var(--teal);">
+        <span>${esc(g)}</span>
+      </label>`).join('');
+    }
+    document.getElementById('ugroups-save-btn').onclick=async()=>{
+      const checks=wrap.querySelectorAll('input[type=checkbox]:checked');
+      const allowed_groups=[...checks].map(c=>c.value);
+      await api('PUT',`/api/users/${id}/groups`,{allowed_groups});
+      closeM('modal-ugroups');
+      loadUsers();
+      showToast(allowed_groups.length?`${allowed_groups.length} Gruppe(n) gesetzt`:'Alle Gruppen erlaubt');
+    };
+  } catch(e){ wrap.innerHTML='<div class="empty-state">Fehler.</div>'; }
+}
 
 async function addUser() {
   const name=document.getElementById('nu-name').value.trim();
   const notes=document.getElementById('nu-notes').value.trim();
   const max_streams=parseInt(document.getElementById('nu-max').value);
   if(!name) return showToast('Name erforderlich',true);
+  // Collect selected groups
+  const groupChecks=document.querySelectorAll('#nu-groups-wrap input[type=checkbox]:checked');
+  const allowed_groups=[...groupChecks].map(c=>c.value).join(',')||null;
   try {
-    await api('POST','/api/users',{name,notes,max_streams});
+    await api('POST','/api/users',{name,notes,max_streams,allowed_groups});
     closeM('modal-adduser');
     document.getElementById('nu-name').value='';
     document.getElementById('nu-notes').value='';
@@ -1189,6 +1268,15 @@ async function loadSettings() {
   document.getElementById('cfg-ref').value=s.hls_referer||'';
   document.getElementById('cfg-timeout').value=s.hls_timeout||'10';
   document.getElementById('cfg-rtimeout').value=s.hls_read_timeout||'30';
+  const refreshSel=document.getElementById('cfg-m3u-refresh');
+  if(refreshSel) refreshSel.value=s.m3u_refresh_hours||'0';
+  const lastEl=document.getElementById('cfg-m3u-last-refresh');
+  if(lastEl && s.m3u_last_refresh && parseFloat(s.m3u_last_refresh)>0){
+    const d=new Date(parseFloat(s.m3u_last_refresh)*1000);
+    lastEl.textContent='Letzter Refresh: '+d.toLocaleString('de-DE');
+  } else if(lastEl){
+    lastEl.textContent=s.m3u_refresh_hours&&s.m3u_refresh_hours!=='0'?'Noch kein automatischer Refresh':'Auto-Refresh deaktiviert';
+  }
 }
 
 async function saveUrls() {
@@ -1196,10 +1284,12 @@ async function saveUrls() {
     base_url:document.getElementById('cfg-base').value.trim(),
     proxy_url:document.getElementById('cfg-proxy').value.trim(),
     short_domain:document.getElementById('cfg-short-domain').value.trim(),
-    source_m3u_url:document.getElementById('cfg-m3u').value.trim()
+    source_m3u_url:document.getElementById('cfg-m3u').value.trim(),
+    m3u_refresh_hours:document.getElementById('cfg-m3u-refresh').value
   });
-  showToast('URLs gespeichert – Benutzer neu laden für Short URLs');
+  showToast('URLs gespeichert');
   loadUsers();
+  loadSettings();
 }
 
 async function saveHls() {
