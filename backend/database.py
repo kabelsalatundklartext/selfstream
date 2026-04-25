@@ -36,15 +36,16 @@ class Database:
                 );
 
                 CREATE TABLE IF NOT EXISTS users (
-                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name        TEXT NOT NULL,
-                    token       TEXT UNIQUE NOT NULL,
-                    short_token TEXT UNIQUE,
-                    m3u_source  TEXT NOT NULL,
-                    active      INTEGER DEFAULT 1,
-                    max_streams INTEGER DEFAULT 1,
-                    created_at  TEXT DEFAULT (datetime('now')),
-                    notes       TEXT DEFAULT ''
+                    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name           TEXT NOT NULL,
+                    token          TEXT UNIQUE NOT NULL,
+                    short_token    TEXT UNIQUE,
+                    m3u_source     TEXT NOT NULL,
+                    active         INTEGER DEFAULT 1,
+                    max_streams    INTEGER DEFAULT 1,
+                    created_at     TEXT DEFAULT (datetime('now')),
+                    notes          TEXT DEFAULT '',
+                    allowed_groups TEXT DEFAULT NULL
                 );
 
                 CREATE TABLE IF NOT EXISTS active_sessions (
@@ -117,6 +118,18 @@ class Database:
             """)
 
     # ── Settings ──────────────────────────────────────────────────────────────
+
+    def get_m3u_refresh_due(self) -> bool:
+        """Check if M3U needs refresh based on m3u_refresh_hours setting."""
+        refresh_hours = int(self.get_setting("m3u_refresh_hours", "0") or "0")
+        if refresh_hours <= 0:
+            return False
+        last = self.get_setting("m3u_last_refresh", "0")
+        last_ts = float(last) if last else 0
+        return (time.time() - last_ts) >= refresh_hours * 3600
+
+    def set_m3u_last_refresh(self):
+        self.set_setting("m3u_last_refresh", str(time.time()))
 
     def get_setting(self, key: str, default: str = None) -> Optional[str]:
         with self.conn() as con:
@@ -236,7 +249,7 @@ class Database:
                     "m3u_source": m3u_source, "active": 1}
 
     def update_user(self, user_id: int, data: Dict):
-        allowed = {"name", "m3u_source", "active", "notes", "max_streams"}
+        allowed = {"name", "m3u_source", "active", "notes", "max_streams", "allowed_groups"}
         fields = {k: v for k, v in data.items() if k in allowed}
         if not fields:
             return
@@ -442,16 +455,21 @@ class Database:
         """Add columns if they don't exist yet (upgrade from older version)."""
         try:
             with self.conn() as con:
-                cols = [r[1] for r in con.execute("PRAGMA table_info(watch_logs)").fetchall()]
-                if "is_catchup" not in cols:
+                # watch_logs migrations
+                wl_cols = [r[1] for r in con.execute("PRAGMA table_info(watch_logs)").fetchall()]
+                if "is_catchup" not in wl_cols:
                     con.execute("ALTER TABLE watch_logs ADD COLUMN is_catchup INTEGER DEFAULT 0")
-                if "catchup_time" not in cols:
+                if "catchup_time" not in wl_cols:
                     con.execute("ALTER TABLE watch_logs ADD COLUMN catchup_time TEXT DEFAULT NULL")
-                if "epg_title" not in cols:
+                if "epg_title" not in wl_cols:
                     con.execute("ALTER TABLE watch_logs ADD COLUMN epg_title TEXT DEFAULT NULL")
+                # users migrations
+                u_cols = [r[1] for r in con.execute("PRAGMA table_info(users)").fetchall()]
+                if "allowed_groups" not in u_cols:
+                    con.execute("ALTER TABLE users ADD COLUMN allowed_groups TEXT DEFAULT NULL")
         except Exception as e:
             import logging
-            logging.getLogger(__name__).warning(f"migrate_watch_logs: {e}")
+            logging.getLogger(__name__).warning(f"migrate: {e}")
 
     def get_epg_channels(self) -> List[Dict]:
         with self.conn() as con:

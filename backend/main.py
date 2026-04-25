@@ -96,6 +96,30 @@ async def _epg_watchdog():
         await asyncio.sleep(300)  # check every 5 minutes
 
 
+async def _m3u_watchdog():
+    """Background task: auto-refresh M3U channels on schedule."""
+    await asyncio.sleep(10)  # wait for startup
+    while True:
+        try:
+            if db.get_m3u_refresh_due():
+                url = db.get_setting("source_m3u_url", "")
+                if url:
+                    logger.info("M3U watchdog: refreshing channels...")
+                    try:
+                        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+                            resp = await client.get(url)
+                            resp.raise_for_status()
+                            channels = parse_m3u(resp.text)
+                        db.upsert_channels(channels)
+                        db.set_m3u_last_refresh()
+                        logger.info(f"M3U auto-refresh: {len(channels)} channels updated")
+                    except Exception as e:
+                        logger.warning(f"M3U auto-refresh failed: {e}")
+        except Exception as e:
+            logger.warning(f"M3U watchdog error: {e}")
+        await asyncio.sleep(600)  # check every 10 minutes
+
+
 @proxy_app.on_event("startup")
 @admin_app.on_event("startup")
 async def startup():
@@ -103,6 +127,7 @@ async def startup():
     db.migrate_watch_logs()
     _generate_error_video()
     asyncio.create_task(_epg_watchdog())
+    asyncio.create_task(_m3u_watchdog())
     logger.info("selfstream started")
 
 
@@ -250,6 +275,12 @@ async def serve_playlist(token: str):
                      "stream_url": c["url"], "tvg_id": c["tvg_id"],
                      "tvg_logo": c["tvg_logo"], "group_title": c["group"],
                      "tvg_rec": c.get("tvg_rec", "")} for c in channels_raw]
+
+    # Filter by user's allowed_groups if set
+    allowed_groups_raw = user.get("allowed_groups", "") or ""
+    if allowed_groups_raw.strip():
+        allowed = {g.strip() for g in allowed_groups_raw.split(",") if g.strip()}
+        channels = [c for c in channels if c.get("group_title", "") in allowed]
 
     content = build_m3u(channels, proxy_url, token, epg_sources)
     db.log_playlist_access(user["id"])
@@ -954,11 +985,14 @@ def create_user(body: dict, _=Depends(check_admin)):
     name = body.get("name", "").strip()
     notes = body.get("notes", "").strip()
     max_streams = body.get("max_streams", 1)
+    allowed_groups = body.get("allowed_groups", "").strip() if body.get("allowed_groups") else None
     if not name:
         raise HTTPException(status_code=400, detail="name required")
     m3u_source = db.get_setting("source_m3u_url", "")
     token = str(uuid.uuid4()).replace("-", "")[:24]
     user = db.create_user(name=name, token=token, m3u_source=m3u_source, notes=notes)
+    if allowed_groups:
+        db.update_user(user["id"], {"allowed_groups": allowed_groups})
     short_token = db.generate_short_token(user["id"])
     proxy_url = db.get_proxy_url()
     short_domain = db.get_setting("short_domain", "")
@@ -1004,6 +1038,17 @@ def delete_user(user_id: int, _=Depends(check_admin)):
 @admin_app.put("/api/users/{user_id}")
 def update_user(user_id: int, body: dict, _=Depends(check_admin)):
     db.update_user(user_id, body)
+    return {"ok": True}
+
+@admin_app.put("/api/users/{user_id}/groups")
+def update_user_groups(user_id: int, body: dict, _=Depends(check_admin)):
+    """Set allowed channel groups for a user. Empty list = all groups allowed."""
+    groups = body.get("allowed_groups", [])
+    if isinstance(groups, list):
+        value = ",".join(g.strip() for g in groups if g.strip()) or None
+    else:
+        value = str(groups).strip() or None
+    db.update_user(user_id, {"allowed_groups": value})
     return {"ok": True}
 
 @admin_app.get("/api/users/{user_id}/logs")
@@ -1383,6 +1428,8 @@ def get_settings(_=Depends(check_admin)):
         "epg_filter_channels":  s.get("epg_filter_channels", "0"),
         "log_retention_days":   s.get("log_retention_days", "-1"),
         "short_domain":         s.get("short_domain", ""),
+        "m3u_refresh_hours":    s.get("m3u_refresh_hours", "0"),
+        "m3u_last_refresh":     s.get("m3u_last_refresh", ""),
     }
 
 @admin_app.post("/api/settings")
@@ -1391,7 +1438,7 @@ def update_settings(body: dict, _=Depends(check_admin)):
                "hls_timeout", "hls_read_timeout", "hls_chunk_size",
                "hls_user_agent", "hls_referer", "hls_follow_redirects",
                "epg_refresh_hours", "epg_filter_channels", "log_retention_days",
-               "short_domain"}
+               "short_domain", "m3u_refresh_hours"}
     for key, val in body.items():
         if key in allowed:
             db.set_setting(key, str(val))
