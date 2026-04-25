@@ -316,6 +316,20 @@ async def serve_playlist(token: str):
                 seen.add(cid)
                 channels.append(c)
 
+    # Sort channels so groups appear in consistent order in IPTV app
+    # Group order is determined by first appearance of group prefix (01., 02., etc.)
+    # or alphabetically for provider groups
+    def _group_sort_key(ch):
+        gt = ch.get("group_title", "")
+        # Numeric prefix like "01. Kinder" → sort by number
+        import re as _re
+        m = _re.match(r"^([0-9]+)\.", gt)
+        if m:
+            return (0, int(m.group(1)), gt)
+        return (1, 0, gt)
+
+    channels.sort(key=_group_sort_key)
+
     content = build_m3u(channels, proxy_url, token, epg_sources)
     db.log_playlist_access(user["id"])
     return HTMLResponse(content=content, media_type="application/x-mpegURL")
