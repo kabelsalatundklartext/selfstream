@@ -280,19 +280,25 @@ async def serve_playlist(token: str):
     allowed_groups_raw = user.get("allowed_groups", "") or ""
     if allowed_groups_raw.strip():
         group_names = [g.strip() for g in allowed_groups_raw.split(",") if g.strip()]
-        # Check if any of the allowed groups are custom user groups
         all_user_group_names = set(db.get_all_user_group_names())
         custom_groups = [g for g in group_names if g in all_user_group_names]
         provider_groups = [g for g in group_names if g not in all_user_group_names]
         result_channels = []
-        # Channels from custom user groups
-        if custom_groups:
-            result_channels.extend(db.get_channels_for_user_groups(custom_groups))
-        # Channels from provider groups (by group_title)
+
+        # Channels from custom user groups — override group_title with user group name
+        for ug_name in custom_groups:
+            ug_channels = db.get_channels_for_user_groups([ug_name])
+            for ch in ug_channels:
+                ch = dict(ch)
+                ch["group_title"] = ug_name  # show custom group name in IPTV app
+                result_channels.append(ch)
+
+        # Channels from provider groups (by group_title) — keep original group_title
         if provider_groups:
             provider_set = set(provider_groups)
             result_channels.extend([c for c in channels if c.get("group_title", "") in provider_set])
-        # Deduplicate by channel id
+
+        # Deduplicate by channel id (custom group takes priority)
         seen = set()
         channels = []
         for c in result_channels:
