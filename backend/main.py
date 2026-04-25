@@ -580,9 +580,16 @@ SESSION_MEM_TTL = 35  # seconds without segment = session dead
 _catchup_sessions: dict = {}
 CATCHUP_TTL = 60  # seconds without segment = catchup done
 
+_last_cleanup = 0.0
+
 def _cleanup_sessions():
     """Remove stale sessions from memory and end their DB records."""
+    global _last_cleanup
     now = time.time()
+    # Throttle: only run cleanup every 10 seconds
+    if now - _last_cleanup < 10:
+        return
+    _last_cleanup = now
     stale = [k for k, v in _sessions.items() if now - v["last_seen"] > SESSION_MEM_TTL]
     for k in stale:
         s = _sessions.pop(k)
@@ -796,6 +803,9 @@ async def proxy_catchup(token: str, channel_id: str, utc: str = None, lutc: str 
 # EPG cache: (content, fetched_at_timestamp, source_url)
 _epg_cache: dict = {"content": None, "fetched_at": 0, "url": ""}
 
+# Parsed EPG tree cache — avoid re-parsing XML on every channel switch
+_epg_tree_cache: dict = {"root": None, "content_hash": None}
+
 @proxy_app.get("/iptv/epg.xml")
 async def global_epg(force: str = None):
     """Global EPG URL – no token needed, same for all users. Cached."""
@@ -837,6 +847,8 @@ async def global_epg(force: str = None):
             content_text = _filter_epg_xml(content_text)
 
         _epg_cache = {"content": content_text, "fetched_at": now, "url": source_url}
+        _epg_tree_cache["root"] = None  # invalidate parsed tree
+        _tvg_id_cache.clear()           # invalidate tvg_id lookup cache
         logger.info(f"EPG cached ({len(content_text)//1024}KB)")
         # Write to disk so admin-app thread can read it too
         try:
@@ -1367,66 +1379,77 @@ def delete_epg(epg_id: int, _=Depends(check_admin)):
     db.delete_epg_source(epg_id)
     return {"ok": True}
 
+def _get_epg_root():
+    """Get parsed EPG XML root, using cached version if content unchanged."""
+    content = _epg_cache.get("content")
+    if not content:
+        try:
+            with open("/data/epg_cache.xml", "r", encoding="utf-8") as _f:
+                content = _f.read()
+        except Exception:
+            return None
+    if not content:
+        return None
+    content_hash = str(len(content))  # fast size-based hash
+    if _epg_tree_cache["root"] is not None and _epg_tree_cache["content_hash"] == content_hash:
+        return _epg_tree_cache["root"]
+    try:
+        root = ET.fromstring(content)
+        _epg_tree_cache["root"] = root
+        _epg_tree_cache["content_hash"] = content_hash
+        return root
+    except Exception:
+        return None
+
+
+# Channel name → tvg_id lookup cache
+_tvg_id_cache: dict = {}
+
 def _get_now_playing(channel_name: str) -> dict:
     """Look up what is currently playing on a channel from the EPG cache."""
     try:
-        content = _epg_cache.get("content")
-        if not content:
-            # Admin-app runs in separate thread – try reading from disk cache
-            try:
-                with open("/data/epg_cache.xml", "r", encoding="utf-8") as _f:
-                    content = _f.read()
-            except Exception:
-                pass
-        if not content:
+        root = _get_epg_root()
+        if root is None:
             return {}
-        import xml.etree.ElementTree as ET
-        from datetime import datetime, timezone
-        root = ET.fromstring(content)
+
         now = datetime.now(timezone.utc)
 
-        # Get tvg_id from channels DB by name
-        ch_record = db.get_channel_by_name(channel_name) or {}
-        tvg_id = ch_record.get("tvg_id", "").strip()
+        # tvg_id lookup with cache
+        if channel_name not in _tvg_id_cache:
+            ch_record = db.get_channel_by_name(channel_name) or {}
+            tvg_id = ch_record.get("tvg_id", "").strip()
+            if not tvg_id:
+                for ch_el in root.findall("channel"):
+                    disp = ch_el.findtext("display-name") or ""
+                    if channel_name.lower() in disp.lower() or disp.lower() in channel_name.lower():
+                        tvg_id = ch_el.get("id", "")
+                        break
+            _tvg_id_cache[channel_name] = tvg_id
 
-        # If no tvg_id, build a display-name → channel-id map from EPG XML
+        tvg_id = _tvg_id_cache.get(channel_name, "")
         if not tvg_id:
-            for ch_el in root.findall("channel"):
-                disp = ch_el.findtext("display-name") or ""
-                if channel_name.lower() in disp.lower() or disp.lower() in channel_name.lower():
-                    tvg_id = ch_el.get("id", "")
-                    break
-
-        if not tvg_id:
-            logger.warning(f"EPG now_playing: no tvg_id found for '{channel_name}'")
             return {}
 
         # Find currently running programme
         fmt = "%Y%m%d%H%M%S %z"
-        matched = 0
         for programme in root.findall("programme"):
             if programme.get("channel", "") != tvg_id:
                 continue
-            matched += 1
             try:
                 start = datetime.strptime(programme.get("start", ""), fmt)
                 stop  = datetime.strptime(programme.get("stop",  ""), fmt)
                 if start <= now <= stop:
-                    title = programme.findtext("title") or ""
-                    desc  = programme.findtext("desc")  or ""
                     return {
-                        "title": title,
-                        "desc":  desc[:120] if desc else "",
+                        "title": programme.findtext("title") or "",
+                        "desc":  (programme.findtext("desc") or "")[:120],
                         "start": start.strftime("%H:%M"),
                         "stop":  stop.strftime("%H:%M"),
                     }
-            except Exception as pe:
-                logger.warning(f"EPG parse error: {pe}")
+            except Exception:
                 continue
-        logger.warning(f"EPG now_playing: no current programme for '{channel_name}' (tvg_id={tvg_id}, programmes checked={matched})")
         return {}
     except Exception as e:
-        logger.warning(f"EPG now_playing error for '{channel_name}': {e}")
+        logger.debug(f"EPG now_playing error for '{channel_name}': {e}")
         return {}
 
 
