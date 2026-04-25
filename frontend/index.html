@@ -321,6 +321,7 @@ tr:hover td{background:rgba(255,255,255,.02);}
           <div style="display:flex;gap:6px;">
             <button class="btn" onclick="openImport()">↓ M3U importieren</button>
             <button class="btn" onclick="refreshCh()">↻ Neu laden</button>
+            <button class="btn" onclick="openGroupManager()">🏷 Gruppen</button>
           </div>
         </div>
         <div class="ch-toolbar">
@@ -638,6 +639,22 @@ tr:hover td{background:rgba(255,255,255,.02);}
     <div class="modal-actions">
       <button class="btn" onclick="closeM('modal-adduser')">Abbrechen</button>
       <button class="btn primary" onclick="addUser()">Erstellen</button>
+    </div>
+  </div>
+</div>
+
+<!-- Group Manager Modal -->
+<div class="modal-bg" id="modal-groups">
+  <div class="modal" style="width:700px;max-width:95vw;">
+    <div class="modal-title">🏷 Gruppen verwalten</div>
+    <p style="font-size:12px;color:var(--text2);margin-bottom:12px;">
+      Klicke auf einen Gruppennamen um ihn umzubenennen. Das Mapping bleibt auch nach einem M3U-Refresh erhalten.
+    </p>
+    <div id="groups-manager-content" style="max-height:450px;overflow-y:auto;">
+      <div class="empty-state">Lädt…</div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeM('modal-groups')">Schließen</button>
     </div>
   </div>
 </div>
@@ -1099,6 +1116,81 @@ async function toggleCh(id,enabled) {
   const i=allCh.findIndex(c=>c.id===id);
   if(i>=0) allCh[i].enabled=enabled?0:1;
   filterCh();
+}
+
+async function openGroupManager() {
+  document.getElementById('modal-groups').classList.add('open');
+  await loadGroupManager();
+}
+
+async function loadGroupManager() {
+  const wrap = document.getElementById('groups-manager-content');
+  wrap.innerHTML = '<div class="empty-state">Lädt…</div>';
+  try {
+    const [groups, mappings] = await Promise.all([
+      api('GET', '/api/channels/groups'),
+      api('GET', '/api/channels/group-mappings')
+    ]);
+    const mappingMap = {};
+    mappings.forEach(m => mappingMap[m.original_name] = m.custom_name);
+
+    if (!groups || !groups.length) {
+      wrap.innerHTML = '<div class="empty-state">Keine Gruppen vorhanden. M3U importieren.</div>';
+      return;
+    }
+
+    wrap.innerHTML = `
+      <table style="width:100%;border-collapse:collapse;">
+        <thead>
+          <tr style="border-bottom:1px solid var(--border);">
+            <th style="padding:8px;text-align:left;font-size:11px;color:var(--text2);">ORIGINAL (vom Anbieter)</th>
+            <th style="padding:8px;text-align:left;font-size:11px;color:var(--text2);">DEIN NAME</th>
+            <th style="padding:8px;width:80px;"></th>
+          </tr>
+        </thead>
+        <tbody>
+          ${groups.map(g => {
+            const custom = mappingMap[g] || g;
+            const hasMapping = !!mappingMap[g];
+            const originalName = Object.keys(mappingMap).find(k => mappingMap[k] === g) || g;
+            return `<tr style="border-bottom:1px solid var(--border);" id="grp-row-${btoa(g).replace(/=/g,'')}">
+              <td style="padding:8px;font-family:var(--mono);font-size:11px;color:var(--text2);">${esc(g)}</td>
+              <td style="padding:8px;">
+                <input class="form-input" style="margin:0;padding:5px 8px;font-size:12px;"
+                  value="${esc(custom)}"
+                  id="grp-input-${btoa(g).replace(/=/g,'')}"
+                  placeholder="${esc(g)}">
+              </td>
+              <td style="padding:8px;text-align:right;">
+                <button class="btn sm primary" onclick="saveGroupRename('${esc(g)}')">✓</button>
+              </td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+      <div style="margin-top:12px;font-size:11px;color:var(--text2);font-family:var(--mono);">
+        💡 Originalnamen wiederherstellen: einfach Feld leer lassen und speichern.
+      </div>`;
+  } catch(e) {
+    wrap.innerHTML = '<div class="empty-state">Fehler beim Laden.</div>';
+  }
+}
+
+async function saveGroupRename(originalName) {
+  const key = btoa(originalName).replace(/=/g, '');
+  const input = document.getElementById(`grp-input-${key}`);
+  if (!input) return;
+  const newName = input.value.trim();
+  if (!newName || newName === originalName) {
+    // Revert to original
+    await api('POST', '/api/channels/group-mapping-delete', {original_name: originalName});
+    showToast(`"${originalName}" wiederhergestellt`);
+  } else {
+    await api('POST', '/api/channels/group-rename', {old_name: originalName, new_name: newName});
+    showToast(`Umbenannt zu "${newName}"`);
+  }
+  await loadCh();
+  await loadGroupManager();
 }
 
 async function grpToggle(val) {
