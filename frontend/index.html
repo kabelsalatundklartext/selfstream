@@ -352,9 +352,17 @@ tr:hover td{background:rgba(255,255,255,.02);}
             <button class="btn primary" onclick="createUserGroup()">+ Neue Gruppe</button>
           </div>
         </div>
-        <p style="font-size:12px;color:var(--text2);margin-bottom:16px;font-family:var(--mono);">
+        <p style="font-size:12px;color:var(--text2);margin-bottom:12px;font-family:var(--mono);">
           💡 Erstelle eigene Gruppen und weise Kanäle zu. User sehen dann nur die Kanäle ihrer Gruppe — egal welche Anbieter-Gruppe der Kanal hat.
         </p>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;padding:10px 14px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;">
+          <span style="font-size:12px;color:var(--text);">Nummerierung in IPTV-App anzeigen</span>
+          <span style="font-size:11px;color:var(--text2);font-family:var(--mono);">(z.B. "01. Kinder", "02. Sport" — erzwingt Sortierung in IPTV Pro)</span>
+          <label style="margin-left:auto;display:flex;align-items:center;gap:8px;cursor:pointer;">
+            <input type="checkbox" id="group-prefix-toggle" onchange="saveGroupPrefix(this.checked)" style="accent-color:var(--teal);width:16px;height:16px;">
+            <span id="group-prefix-label" style="font-size:12px;color:var(--text2);">Aus</span>
+          </label>
+        </div>
         <div id="ugroups-list">
           <div class="empty-state">Keine Gruppen vorhanden. Oben neue Gruppe anlegen.</div>
         </div>
@@ -800,7 +808,7 @@ function nav(page, el) {
   if(page==='dashboard') loadStats();
   if(page==='users') loadUsers();
   if(page==='channels') loadCh();
-  if(page==='groups') loadUserGroups();
+  if(page==='groups') { loadUserGroups(); loadGroupPrefixSetting(); }
   if(page==='epg') { loadEpg(); loadEpgChannels(); }
   if(page==='logs') loadLogs();
   if(page==='settings') loadSettings();
@@ -1208,6 +1216,23 @@ async function loadUserGroups() {
       el.textContent = names.join(' · ') + (ids.length > 8 ? ` · +${ids.length-8} weitere` : '');
     });
   }
+}
+
+async function loadGroupPrefixSetting() {
+  try {
+    const s = await api('GET', '/api/settings');
+    const enabled = s.group_sort_prefix !== '0';
+    const cb = document.getElementById('group-prefix-toggle');
+    const lbl = document.getElementById('group-prefix-label');
+    if (cb) cb.checked = enabled;
+    if (lbl) lbl.textContent = enabled ? 'An' : 'Aus';
+  } catch(e) {}
+}
+
+async function saveGroupPrefix(enabled) {
+  await api('POST', '/api/settings', {group_sort_prefix: enabled ? '1' : '0'});
+  document.getElementById('group-prefix-label').textContent = enabled ? 'An' : 'Aus';
+  showToast(enabled ? 'Nummerierung aktiviert — Playlist neu laden in IPTV-App' : 'Nummerierung deaktiviert');
 }
 
 async function createUserGroup() {
