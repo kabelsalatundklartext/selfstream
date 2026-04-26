@@ -909,6 +909,7 @@ async def proxy_segment(token: str, url: str, sid: str = None, catchup: str = No
                         speed_mbps = (total * 8) / (elapsed * 1_000_000) if elapsed > 0 else 0
                         seg_name = decoded_url.split("/")[-1].split("?")[0]
                         user_name = _sessions.get(session_key, {}).get("user_name") or token[:8]
+                        channel_name = _sessions.get(session_key, {}).get("channel", "")
 
                         if elapsed > 2.0:
                             logger.warning(
@@ -917,6 +918,7 @@ async def proxy_segment(token: str, url: str, sid: str = None, catchup: str = No
                             )
                             _segment_events.append({
                                 "time": time.time(), "user": user_name,
+                                "channel": channel_name,
                                 "type": "slow", "elapsed": round(elapsed, 2),
                                 "size_kb": round(size_kb), "mbps": round(speed_mbps, 1),
                                 "seg": seg_name
@@ -928,6 +930,7 @@ async def proxy_segment(token: str, url: str, sid: str = None, catchup: str = No
                             )
                             _segment_events.append({
                                 "time": time.time(), "user": user_name,
+                                "channel": channel_name,
                                 "type": "delayed", "elapsed": round(elapsed, 2),
                                 "size_kb": round(size_kb), "mbps": round(speed_mbps, 1),
                                 "seg": seg_name
