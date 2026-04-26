@@ -704,31 +704,68 @@ tr:hover td{background:rgba(255,255,255,.02);}
           </div>
 
           <div class="scard" style="grid-column:1/-1">
-            <div class="scard-title">🚀 Speedtest</div>
-            <div class="form-hint" style="margin-bottom:12px;">
-              Misst die aktuelle Download-Geschwindigkeit – <span id="speedtest-vpn-hint">direkt oder über VPN je nach Status</span>.
-              Hilft zu berechnen wie viele User gleichzeitig streamen können.
+            <div class="scard-title">🚀 Speedtest – Flaschenhals-Analyse</div>
+            <div class="form-hint" style="margin-bottom:14px;">
+              Misst <strong>Internet/VPN-Geschwindigkeit</strong> und <strong>IPTV-Anbieter-Geschwindigkeit</strong> getrennt – zeigt wo der Flaschenhals ist.
             </div>
             <button class="btn primary" id="speedtest-btn" onclick="runSpeedtest()">▶ Speedtest starten</button>
-            <div id="speedtest-result" style="display:none;margin-top:16px;">
-              <div style="display:flex;align-items:flex-end;gap:6px;margin-bottom:8px;">
-                <span id="speedtest-mbps" style="font-size:48px;font-family:var(--mono);color:var(--teal);line-height:1;">–</span>
-                <span style="font-size:16px;color:var(--text2);margin-bottom:8px;">Mbit/s</span>
-              </div>
-              <div id="speedtest-detail" style="font-size:11px;color:var(--text2);font-family:var(--mono);margin-bottom:14px;"></div>
-              <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;" id="speedtest-streams">
-                <div class="scard" style="text-align:center;padding:12px;">
-                  <div style="font-size:22px;font-family:var(--mono);color:var(--teal);" id="st-hd">–</div>
-                  <div style="font-size:10px;color:var(--text2);margin-top:4px;">HD Streams (720p)<br>~4 Mbit/s</div>
+
+            <div id="speedtest-result" style="display:none;margin-top:20px;">
+
+              <!-- Bottleneck Banner -->
+              <div id="speedtest-bottleneck" style="padding:10px 14px;border-radius:6px;background:var(--bg2);border:1px solid var(--border);margin-bottom:16px;font-size:12px;font-family:var(--mono);"></div>
+
+              <!-- Two columns -->
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+
+                <!-- Internet/VPN -->
+                <div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:16px;">
+                  <div style="font-size:10px;color:var(--text2);letter-spacing:.15em;margin-bottom:8px;">🌐 INTERNET / VPN</div>
+                  <div style="display:flex;align-items:flex-end;gap:4px;margin-bottom:4px;">
+                    <span id="st-inet-mbps" style="font-size:42px;font-family:var(--mono);color:var(--teal);line-height:1;">–</span>
+                    <span style="font-size:13px;color:var(--text2);margin-bottom:6px;">Mbit/s</span>
+                  </div>
+                  <div id="st-inet-detail" style="font-size:10px;color:var(--text2);font-family:var(--mono);margin-bottom:12px;"></div>
+                  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;">
+                    <div style="text-align:center;background:var(--bg);border-radius:6px;padding:8px;">
+                      <div id="st-inet-hd" style="font-size:18px;font-family:var(--mono);color:var(--teal);">–</div>
+                      <div style="font-size:9px;color:var(--text2);">HD</div>
+                    </div>
+                    <div style="text-align:center;background:var(--bg);border-radius:6px;padding:8px;">
+                      <div id="st-inet-fhd" style="font-size:18px;font-family:var(--mono);color:var(--teal);">–</div>
+                      <div style="font-size:9px;color:var(--text2);">FHD</div>
+                    </div>
+                    <div style="text-align:center;background:var(--bg);border-radius:6px;padding:8px;">
+                      <div id="st-inet-4k" style="font-size:18px;font-family:var(--mono);color:var(--teal);">–</div>
+                      <div style="font-size:9px;color:var(--text2);">4K</div>
+                    </div>
+                  </div>
                 </div>
-                <div class="scard" style="text-align:center;padding:12px;">
-                  <div style="font-size:22px;font-family:var(--mono);color:var(--teal);" id="st-fhd">–</div>
-                  <div style="font-size:10px;color:var(--text2);margin-top:4px;">Full HD Streams (1080p)<br>~8 Mbit/s</div>
+
+                <!-- IPTV Provider -->
+                <div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:16px;">
+                  <div style="font-size:10px;color:var(--text2);letter-spacing:.15em;margin-bottom:8px;">📺 IPTV-ANBIETER</div>
+                  <div style="display:flex;align-items:flex-end;gap:4px;margin-bottom:4px;">
+                    <span id="st-iptv-mbps" style="font-size:42px;font-family:var(--mono);color:var(--teal);line-height:1;">–</span>
+                    <span style="font-size:13px;color:var(--text2);margin-bottom:6px;">Mbit/s</span>
+                  </div>
+                  <div id="st-iptv-detail" style="font-size:10px;color:var(--text2);font-family:var(--mono);margin-bottom:12px;"></div>
+                  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;">
+                    <div style="text-align:center;background:var(--bg);border-radius:6px;padding:8px;">
+                      <div id="st-iptv-hd" style="font-size:18px;font-family:var(--mono);color:var(--teal);">–</div>
+                      <div style="font-size:9px;color:var(--text2);">HD</div>
+                    </div>
+                    <div style="text-align:center;background:var(--bg);border-radius:6px;padding:8px;">
+                      <div id="st-iptv-fhd" style="font-size:18px;font-family:var(--mono);color:var(--teal);">–</div>
+                      <div style="font-size:9px;color:var(--text2);">FHD</div>
+                    </div>
+                    <div style="text-align:center;background:var(--bg);border-radius:6px;padding:8px;">
+                      <div id="st-iptv-4k" style="font-size:18px;font-family:var(--mono);color:var(--teal);">–</div>
+                      <div style="font-size:9px;color:var(--text2);">4K</div>
+                    </div>
+                  </div>
                 </div>
-                <div class="scard" style="text-align:center;padding:12px;">
-                  <div style="font-size:22px;font-family:var(--mono);color:var(--teal);" id="st-4k">–</div>
-                  <div style="font-size:10px;color:var(--text2);margin-top:4px;">4K Streams<br>~25 Mbit/s</div>
-                </div>
+
               </div>
             </div>
           </div>
@@ -2187,31 +2224,68 @@ async function vpnStop() {
 async function runSpeedtest() {
   const btn = document.getElementById('speedtest-btn');
   const result = document.getElementById('speedtest-result');
-  const mbpsEl = document.getElementById('speedtest-mbps');
-  const detailEl = document.getElementById('speedtest-detail');
-
   btn.disabled = true;
-  btn.textContent = '⏳ Teste…';
-  mbpsEl.textContent = '…';
+  btn.textContent = '⏳ Teste Internet…';
   result.style.display = 'block';
-  detailEl.textContent = 'Verbinde mit Testserver…';
+
+  // Reset
+  ['inet','iptv'].forEach(t => {
+    document.getElementById(`st-${t}-mbps`).textContent = '…';
+    document.getElementById(`st-${t}-detail`).textContent = '';
+    document.getElementById(`st-${t}-hd`).textContent = '–';
+    document.getElementById(`st-${t}-fhd`).textContent = '–';
+    document.getElementById(`st-${t}-4k`).textContent = '–';
+  });
+  document.getElementById('speedtest-bottleneck').textContent = '⏳ Teste…';
+
+  btn.textContent = '⏳ Teste IPTV-Anbieter…';
 
   try {
     const data = await api('GET', '/api/vpn/speedtest');
-    if (!data.ok) {
-      mbpsEl.textContent = '!';
-      detailEl.textContent = data.error || 'Fehler';
+
+    // Internet result
+    const inet = data.internet;
+    if (inet && inet.ok) {
+      document.getElementById('st-inet-mbps').textContent = inet.mbps;
+      document.getElementById('st-inet-detail').textContent =
+        `${inet.mb} MB in ${inet.seconds}s • ${inet.server || ''} • ${data.via_vpn ? '🔒 VPN' : '🌐 direkt'}`;
+      document.getElementById('st-inet-hd').textContent  = (inet.streams?.hd_720p  || 0) + 'x';
+      document.getElementById('st-inet-fhd').textContent = (inet.streams?.fhd_1080p|| 0) + 'x';
+      document.getElementById('st-inet-4k').textContent  = (inet.streams?.uhd_4k   || 0) + 'x';
     } else {
-      mbpsEl.textContent = data.mbps;
-      detailEl.textContent = `${data.mb_downloaded} MB in ${data.seconds}s heruntergeladen • ${data.via_vpn ? '🔒 via VPN' : '🌐 direkt'}`;
-      document.getElementById('st-hd').textContent  = data.streams.hd_720p   + 'x';
-      document.getElementById('st-fhd').textContent = data.streams.fhd_1080p + 'x';
-      document.getElementById('st-4k').textContent  = data.streams.uhd_4k    + 'x';
+      document.getElementById('st-inet-mbps').textContent = '!';
+      document.getElementById('st-inet-detail').textContent = inet?.error || 'Fehler';
     }
+
+    // IPTV result
+    const iptv = data.iptv;
+    if (iptv && iptv.ok) {
+      document.getElementById('st-iptv-mbps').textContent = iptv.mbps;
+      document.getElementById('st-iptv-detail').textContent =
+        `${iptv.mb} MB in ${iptv.seconds}s • ${iptv.server || ''}`;
+      document.getElementById('st-iptv-hd').textContent  = (iptv.streams?.hd_720p  || 0) + 'x';
+      document.getElementById('st-iptv-fhd').textContent = (iptv.streams?.fhd_1080p|| 0) + 'x';
+      document.getElementById('st-iptv-4k').textContent  = (iptv.streams?.uhd_4k   || 0) + 'x';
+    } else {
+      document.getElementById('st-iptv-mbps').textContent = '!';
+      document.getElementById('st-iptv-detail').textContent = iptv?.error || 'Kein IPTV-Kanal zum Testen';
+    }
+
+    // Bottleneck
+    const bn = document.getElementById('speedtest-bottleneck');
+    if (data.bottleneck) {
+      const isBottleneck = data.bottleneck.includes('Flaschenhals') && !data.bottleneck.includes('Kein');
+      bn.style.borderColor = isBottleneck ? '#ef4444' : '#00e5c8';
+      bn.style.color = isBottleneck ? '#ef4444' : 'var(--teal)';
+      bn.textContent = data.bottleneck;
+    } else {
+      bn.textContent = '';
+    }
+
   } catch(e) {
-    mbpsEl.textContent = '!';
-    detailEl.textContent = 'Fehler: ' + e;
+    document.getElementById('speedtest-bottleneck').textContent = 'Fehler: ' + e;
   }
+
   btn.disabled = false;
   btn.textContent = '▶ Speedtest starten';
 }
