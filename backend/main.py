@@ -821,9 +821,30 @@ async def proxy_segment(token: str, url: str, sid: str = None, catchup: str = No
                     yield rewritten.encode()
                     return
                 else:
-                    async with client.stream("GET", decoded_url) as resp:
-                        async for chunk in resp.aiter_bytes(chunk_size=hls["hls_chunk_size"]):
+                    # Retry once if segment is suspiciously small (< 10KB = broken segment)
+                    for attempt in range(2):
+                        chunks = []
+                        total = 0
+                        try:
+                            async with client.stream("GET", decoded_url) as resp:
+                                async for chunk in resp.aiter_bytes(chunk_size=hls["hls_chunk_size"]):
+                                    chunks.append(chunk)
+                                    total += len(chunk)
+                        except Exception as e:
+                            if attempt == 0:
+                                logger.warning(f"Segment fetch error (retry): {e}")
+                                await asyncio.sleep(0.3)
+                                continue
+                            raise
+
+                        if total < 10_000 and attempt == 0:
+                            logger.warning(f"Tiny segment ({total} bytes), retrying: {decoded_url[-50:]}")
+                            await asyncio.sleep(0.5)
+                            continue
+
+                        for chunk in chunks:
                             yield chunk
+                        break
         except asyncio.CancelledError:
             pass
         except Exception as e:
