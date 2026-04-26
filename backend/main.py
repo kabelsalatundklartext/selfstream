@@ -2145,20 +2145,35 @@ def vpn_stop_endpoint(_=Depends(check_admin)):
     return vpn_stop()
 
 
+_vpn_public_ip_cache: dict = {"ip": "", "ts": 0.0}
+VPN_IP_CACHE_TTL = 60  # only check public IP every 60 seconds
+
+
 @admin_app.get("/api/vpn/status")
 async def get_vpn_status(_=Depends(check_admin)):
     running = vpn_is_running()
     public_ip = ""
     if running:
-        for url in ["https://ifconfig.me/ip", "https://api.ipify.org", "https://checkip.amazonaws.com"]:
-            try:
-                async with make_iptv_client(timeout=8) as client:
-                    r = await client.get(url)
-                    if r.status_code == 200:
-                        public_ip = r.text.strip()
-                        break
-            except Exception:
-                continue
+        now = time.time()
+        # Use cached IP if fresh enough
+        if _vpn_public_ip_cache["ip"] and now - _vpn_public_ip_cache["ts"] < VPN_IP_CACHE_TTL:
+            public_ip = _vpn_public_ip_cache["ip"]
+        else:
+            for url in ["https://ifconfig.me/ip", "https://api.ipify.org", "https://checkip.amazonaws.com"]:
+                try:
+                    async with httpx.AsyncClient(timeout=5) as client:
+                        r = await client.get(url)
+                        if r.status_code == 200:
+                            public_ip = r.text.strip()
+                            _vpn_public_ip_cache["ip"] = public_ip
+                            _vpn_public_ip_cache["ts"] = now
+                            break
+                except Exception:
+                    continue
+    else:
+        # VPN stopped – clear cache
+        _vpn_public_ip_cache["ip"] = ""
+        _vpn_public_ip_cache["ts"] = 0.0
     return {
         "running": running,
         "public_ip": public_ip,
