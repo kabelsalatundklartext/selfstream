@@ -2177,14 +2177,12 @@ async function vpnRefreshStatus() {
 }
 
 // Stop polling when leaving VPN page
-const _origNav = nav;
-function nav(page, el) {
-  if (page !== 'vpn' && _vpnStatusInterval) {
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && _vpnStatusInterval) {
     clearInterval(_vpnStatusInterval);
     _vpnStatusInterval = null;
   }
-  _origNav(page, el);
-}
+});
 
 </script>
 </body>
