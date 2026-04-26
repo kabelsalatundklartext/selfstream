@@ -2008,57 +2008,104 @@ def vpn_delete_ovpn(filename: str, _=Depends(check_admin)):
 
 @admin_app.get("/api/vpn/speedtest")
 async def vpn_speedtest(_=Depends(check_admin)):
-    """Run a download speedtest using a public test file, routed through VPN if active."""
+    """Run dual speedtest: internet speed + IPTV provider speed."""
     import time
 
-    # Test URLs - verschiedene Größen für genaue Messung
-    test_urls = [
-        "https://speed.cloudflare.com/__down?bytes=10000000",   # 10 MB Cloudflare
-        "https://bouygues.testdebit.info/10M.iso",              # 10 MB Bouygues
-        "https://proof.ovh.net/files/10Mb.dat",                # 10 MB OVH
-    ]
-
-    results = []
-    for url in test_urls:
+    async def measure_url(url: str, max_bytes: int = 10_000_000, timeout_sec: int = 10) -> dict:
         try:
             start = time.monotonic()
             downloaded = 0
-            async with make_iptv_client(timeout=httpx.Timeout(5, read=30), follow_redirects=True) as client:
+            async with make_iptv_client(
+                timeout=httpx.Timeout(5, read=timeout_sec),
+                follow_redirects=True
+            ) as client:
                 async with client.stream("GET", url) as resp:
-                    if resp.status_code != 200:
-                        continue
+                    if resp.status_code not in (200, 206):
+                        return {"ok": False, "error": f"HTTP {resp.status_code}"}
                     async for chunk in resp.aiter_bytes(chunk_size=65536):
                         downloaded += len(chunk)
-                        # Stop after 10MB or 8 seconds
-                        if downloaded >= 10_000_000 or (time.monotonic() - start) > 8:
+                        if downloaded >= max_bytes or (time.monotonic() - start) > timeout_sec:
                             break
             elapsed = time.monotonic() - start
-            if elapsed > 0 and downloaded > 100_000:
+            if elapsed > 0 and downloaded > 50_000:
                 mbps = (downloaded * 8) / (elapsed * 1_000_000)
-                results.append({"url": url, "mbps": round(mbps, 2), "mb": round(downloaded/1_000_000, 1), "seconds": round(elapsed, 1)})
-                break  # First successful test is enough
+                return {"ok": True, "mbps": round(mbps, 1), "mb": round(downloaded/1_000_000, 2), "seconds": round(elapsed, 2)}
+            return {"ok": False, "error": "Zu wenig Daten"}
         except Exception as e:
-            logger.warning(f"Speedtest {url} failed: {e}")
-            continue
+            return {"ok": False, "error": str(e)}
 
-    if not results:
-        return {"ok": False, "error": "Alle Testserver nicht erreichbar"}
+    def streams_estimate(mbps: float) -> dict:
+        return {
+            "hd_720p":   int(mbps / 4),
+            "fhd_1080p": int(mbps / 8),
+            "uhd_4k":    int(mbps / 25),
+        }
 
-    best = results[0]
-    # Estimate concurrent streams (assume ~4 Mbit/s per HD stream)
-    streams_hd   = int(best["mbps"] / 4)
-    streams_fhd  = int(best["mbps"] / 8)
-    streams_4k   = int(best["mbps"] / 25)
+    # ── Test 1: Internet/VPN Speed ─────────────────────────────────────────
+    internet_result = {"ok": False, "error": "Alle Server nicht erreichbar"}
+    for url in [
+        "https://speed.cloudflare.com/__down?bytes=10000000",
+        "https://proof.ovh.net/files/10Mb.dat",
+        "https://bouygues.testdebit.info/10M.iso",
+    ]:
+        r = await measure_url(url)
+        if r["ok"]:
+            internet_result = r
+            internet_result["server"] = url.split("/")[2]
+            break
+
+    # ── Test 2: IPTV Provider Speed ────────────────────────────────────────
+    iptv_result = {"ok": False, "error": "Kein IPTV-Kanal verfügbar"}
+    # Get a live channel URL from DB
+    channels = db.get_channels(enabled_only=True)
+    iptv_url = None
+    for ch in channels[:20]:
+        url = ch.get("stream_url", "")
+        if url and "m3u8" not in url and url.startswith("http"):
+            iptv_url = url
+            break
+    # Try to get a .ts segment from a m3u8 playlist
+    if not iptv_url:
+        for ch in channels[:10]:
+            url = ch.get("stream_url", "")
+            if url and "m3u8" in url:
+                try:
+                    async with make_iptv_client(timeout=httpx.Timeout(5, read=10), follow_redirects=True) as client:
+                        resp = await client.get(url)
+                        if resp.status_code == 200:
+                            for line in resp.text.splitlines():
+                                if line.strip() and not line.startswith("#") and ".ts" in line:
+                                    base = "/".join(url.split("/")[:-1])
+                                    iptv_url = line.strip() if line.startswith("http") else f"{base}/{line.strip()}"
+                                    break
+                except Exception:
+                    pass
+                if iptv_url:
+                    break
+
+    if iptv_url:
+        r = await measure_url(iptv_url, max_bytes=5_000_000, timeout_sec=8)
+        if r["ok"]:
+            iptv_result = r
+            iptv_result["server"] = iptv_url.split("/")[2]
+
+    # ── Bottleneck Analysis ────────────────────────────────────────────────
+    bottleneck = None
+    if internet_result.get("ok") and iptv_result.get("ok"):
+        inet_mbps = internet_result["mbps"]
+        iptv_mbps = iptv_result["mbps"]
+        ratio = iptv_mbps / inet_mbps if inet_mbps > 0 else 0
+        if ratio < 0.5:
+            bottleneck = f"IPTV-Anbieter ist der Flaschenhals ({iptv_result['server']}) – nur {round(ratio*100)}% der VPN-Geschwindigkeit"
+        elif ratio < 0.8:
+            bottleneck = f"IPTV-Anbieter etwas langsamer ({round(ratio*100)}% der VPN-Geschwindigkeit)"
+        else:
+            bottleneck = f"Kein Flaschenhals – IPTV-Anbieter liefert {round(ratio*100)}% der VPN-Geschwindigkeit"
 
     return {
         "ok": True,
-        "mbps": best["mbps"],
-        "mb_downloaded": best["mb"],
-        "seconds": best["seconds"],
         "via_vpn": vpn_is_running(),
-        "streams": {
-            "hd_720p":  streams_hd,
-            "fhd_1080p": streams_fhd,
-            "uhd_4k":   streams_4k,
-        }
+        "internet": {**internet_result, "streams": streams_estimate(internet_result.get("mbps", 0)) if internet_result.get("ok") else {}},
+        "iptv":     {**iptv_result,     "streams": streams_estimate(iptv_result.get("mbps", 0))     if iptv_result.get("ok") else {}},
+        "bottleneck": bottleneck,
     }
