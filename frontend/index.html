@@ -819,11 +819,21 @@ tr:hover td{background:rgba(255,255,255,.02);}
 
         <!-- Traffic History Chart -->
         <div class="scard">
-          <div class="scard-title">📈 Stream-Verlauf (letzte 60 Messungen)</div>
-          <canvas id="tr-chart" height="80" style="width:100%;"></canvas>
-          <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:10px;color:var(--text2);font-family:var(--mono);">
-            <span id="tr-chart-min">–– ago</span>
-            <span>Jetzt</span>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+            <div class="scard-title" style="margin:0;">📈 Stream-Verlauf</div>
+            <select id="tr-range" class="group-filter" style="font-size:11px;padding:4px 8px;" onchange="drawTrafficChart()">
+              <option value="300">Letzte 5 Min</option>
+              <option value="900">Letzte 15 Min</option>
+              <option value="1800">Letzte 30 Min</option>
+              <option value="3600" selected>Letzte 1h</option>
+              <option value="all">Alles</option>
+            </select>
+          </div>
+          <canvas id="tr-chart" height="120" style="width:100%;display:block;"></canvas>
+          <div style="display:flex;justify-content:space-between;margin-top:4px;font-size:10px;color:var(--text2);font-family:var(--mono);">
+            <span id="tr-chart-min">–</span>
+            <span style="color:#ff6b6b;">● Peak</span>
+            <span>Jetzt →</span>
           </div>
         </div>
       </div>
@@ -2395,7 +2405,8 @@ async function vpnRefreshStatus() {
 let _trafficInterval = null;
 let _trafficHistory = []; // [{time, streams, mbps}]
 let _trafficPeak = 0;
-const ASSUMED_MBPS_PER_STREAM = 6; // assume ~6 Mbit/s per HD stream
+const ASSUMED_MBPS_PER_STREAM = 6;
+const TRAFFIC_MAX_POINTS = 720; // up to 720 data points (1h @ 5s = 720)
 
 function stopTrafficMonitor() {
   if (_trafficInterval) { clearInterval(_trafficInterval); _trafficInterval = null; }
@@ -2416,13 +2427,12 @@ async function updateTraffic() {
   const estimatedMbps = activeStreams * ASSUMED_MBPS_PER_STREAM;
   if (activeStreams > _trafficPeak) _trafficPeak = activeStreams;
 
-  // Update counters
   document.getElementById('tr-streams').textContent = activeStreams;
   document.getElementById('tr-mbps').textContent = estimatedMbps;
   document.getElementById('tr-today').textContent = s.watch_logs_today || 0;
   document.getElementById('tr-peak').textContent = _trafficPeak;
 
-  // Update live sessions list
+  // Live sessions list
   const list = document.getElementById('tr-sessions-list');
   if (!s.active_sessions?.length) {
     list.innerHTML = '<div class="empty-state">Keine aktiven Streams</div>';
@@ -2443,69 +2453,137 @@ async function updateTraffic() {
     }).join('');
   }
 
-  // Update history & chart
-  const now = new Date();
-  _trafficHistory.push({ time: now, streams: activeStreams, mbps: estimatedMbps });
-  if (_trafficHistory.length > 60) _trafficHistory.shift();
+  // History
+  _trafficHistory.push({ time: new Date(), streams: activeStreams, mbps: estimatedMbps });
+  if (_trafficHistory.length > TRAFFIC_MAX_POINTS) _trafficHistory.shift();
   drawTrafficChart();
+}
+
+function getVisiblePoints() {
+  const range = document.getElementById('tr-range')?.value || '300';
+  if (range === 'all') return _trafficHistory;
+  const cutoff = Date.now() - parseInt(range) * 1000;
+  return _trafficHistory.filter(p => p.time.getTime() >= cutoff);
 }
 
 function drawTrafficChart() {
   const canvas = document.getElementById('tr-chart');
   if (!canvas) return;
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.offsetWidth;
+  const H = 120;
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
   const ctx = canvas.getContext('2d');
-  canvas.width = canvas.offsetWidth * window.devicePixelRatio || 800;
-  canvas.height = 80 * window.devicePixelRatio;
-  ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
-  const W = canvas.offsetWidth, H = 80;
-
+  ctx.scale(dpr, dpr);
   ctx.clearRect(0, 0, W, H);
 
-  const maxStreams = Math.max(4, ..._trafficHistory.map(p => p.streams));
-  const pts = _trafficHistory;
-  if (pts.length < 2) return;
+  const pts = getVisiblePoints();
+  const PAD_L = 36; // left padding for Y-axis labels
+  const PAD_R = 8;
+  const PAD_T = 8;
+  const PAD_B = 20;
+  const chartW = W - PAD_L - PAD_R;
+  const chartH = H - PAD_T - PAD_B;
 
-  // Draw grid lines
-  ctx.strokeStyle = 'rgba(255,255,255,0.05)';
-  ctx.lineWidth = 1;
-  for (let i = 1; i <= 4; i++) {
-    const y = H - (i / 4) * H;
-    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+  const maxStreams = Math.max(4, ..._trafficHistory.map(p => p.streams));
+  const yMax = Math.ceil(maxStreams / 2) * 2 + 2; // round up to even + buffer
+
+  // Y-axis gridlines + labels
+  const ySteps = Math.min(yMax, 8);
+  for (let i = 0; i <= ySteps; i++) {
+    const val = Math.round((yMax / ySteps) * i);
+    const y = PAD_T + chartH - (val / yMax) * chartH;
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(PAD_L, y); ctx.lineTo(W - PAD_R, y); ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.font = `${9 * dpr / dpr}px monospace`;
+    ctx.textAlign = 'right';
+    ctx.fillText(val, PAD_L - 4, y + 3);
   }
 
-  // Draw filled area
-  const xStep = W / (pts.length - 1);
+  // Y-axis label
+  ctx.save();
+  ctx.translate(10, PAD_T + chartH / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.fillStyle = 'rgba(255,255,255,0.3)';
+  ctx.font = '9px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('STREAMS', 0, 0);
+  ctx.restore();
+
+  if (pts.length < 2) {
+    ctx.fillStyle = 'rgba(255,255,255,0.2)';
+    ctx.font = '11px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('Noch zu wenig Daten…', W/2, H/2);
+    return;
+  }
+
+  const xStep = chartW / (pts.length - 1);
+
+  const getXY = (i) => ({
+    x: PAD_L + i * xStep,
+    y: PAD_T + chartH - (pts[i].streams / yMax) * chartH
+  });
+
+  // Filled area
   ctx.beginPath();
   pts.forEach((p, i) => {
-    const x = i * xStep;
-    const y = H - (p.streams / maxStreams) * (H - 8);
+    const {x, y} = getXY(i);
     i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
   });
-  ctx.lineTo((pts.length - 1) * xStep, H);
-  ctx.lineTo(0, H);
+  ctx.lineTo(PAD_L + (pts.length-1) * xStep, PAD_T + chartH);
+  ctx.lineTo(PAD_L, PAD_T + chartH);
   ctx.closePath();
-  const grad = ctx.createLinearGradient(0, 0, 0, H);
-  grad.addColorStop(0, 'rgba(0,229,200,0.4)');
+  const grad = ctx.createLinearGradient(0, PAD_T, 0, PAD_T + chartH);
+  grad.addColorStop(0, 'rgba(0,229,200,0.35)');
   grad.addColorStop(1, 'rgba(0,229,200,0.02)');
   ctx.fillStyle = grad;
   ctx.fill();
 
-  // Draw line
+  // Line
   ctx.beginPath();
   ctx.strokeStyle = '#00e5c8';
   ctx.lineWidth = 2;
   pts.forEach((p, i) => {
-    const x = i * xStep;
-    const y = H - (p.streams / maxStreams) * (H - 8);
+    const {x, y} = getXY(i);
     i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
   });
   ctx.stroke();
 
-  // Time label
+  // Peak dots
+  const peakVal = Math.max(...pts.map(p => p.streams));
+  pts.forEach((p, i) => {
+    if (p.streams === peakVal && peakVal > 0) {
+      const {x, y} = getXY(i);
+      ctx.beginPath();
+      ctx.arc(x, y, 4, 0, Math.PI * 2);
+      ctx.fillStyle = '#ff6b6b';
+      ctx.fill();
+    }
+  });
+
+  // X-axis time labels
+  ctx.fillStyle = 'rgba(255,255,255,0.3)';
+  ctx.font = '9px monospace';
+  ctx.textAlign = 'center';
+  const labelCount = Math.min(6, pts.length);
+  for (let i = 0; i < labelCount; i++) {
+    const idx = Math.round(i * (pts.length - 1) / (labelCount - 1));
+    const x = PAD_L + idx * xStep;
+    const t = pts[idx].time;
+    const label = t.toLocaleTimeString('de-DE', {hour:'2-digit', minute:'2-digit'});
+    ctx.fillText(label, x, H - 4);
+  }
+
+  // Update time range label
   if (pts.length > 1) {
     const diffSec = Math.round((pts[pts.length-1].time - pts[0].time) / 1000);
-    document.getElementById('tr-chart-min').textContent =
-      diffSec > 60 ? `${Math.floor(diffSec/60)}m ago` : `${diffSec}s ago`;
+    const el = document.getElementById('tr-chart-min');
+    if (el) el.textContent = diffSec > 3600 ? `${Math.floor(diffSec/3600)}h ${Math.floor((diffSec%3600)/60)}m ago`
+                           : diffSec > 60   ? `${Math.floor(diffSec/60)}m ago` : `${diffSec}s ago`;
   }
 }
 
