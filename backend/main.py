@@ -34,6 +34,9 @@ for a in (proxy_app, admin_app):
 
 db = Database()
 
+# Segment timing events for buffering diagnosis
+_segment_events: list = []
+
 async def _fetch_and_cache_epg():
     """Fetch EPG from source, update memory + disk cache."""
     global _epg_cache
@@ -825,6 +828,7 @@ async def proxy_segment(token: str, url: str, sid: str = None, catchup: str = No
                     for attempt in range(2):
                         chunks = []
                         total = 0
+                        t_start = time.time()
                         try:
                             async with client.stream("GET", decoded_url) as resp:
                                 async for chunk in resp.aiter_bytes(chunk_size=hls["hls_chunk_size"]):
@@ -837,10 +841,49 @@ async def proxy_segment(token: str, url: str, sid: str = None, catchup: str = No
                                 continue
                             raise
 
+                        elapsed = time.time() - t_start
+
                         if total < 10_000 and attempt == 0:
                             logger.warning(f"Tiny segment ({total} bytes), retrying: {decoded_url[-50:]}")
                             await asyncio.sleep(0.5)
                             continue
+
+                        # Log slow segments - these cause buffering
+                        size_kb = total / 1024
+                        speed_mbps = (total * 8) / (elapsed * 1_000_000) if elapsed > 0 else 0
+                        seg_name = decoded_url.split("/")[-1].split("?")[0]
+                        user_name = _sessions.get(session_key, {}).get("user_name", token[:8])
+                        if elapsed > 2.0:
+                            logger.warning(
+                                f"⚠️ SLOW SEGMENT [{user_name}] {seg_name}: "
+                                f"{elapsed:.1f}s, {size_kb:.0f}KB, {speed_mbps:.1f}Mbit/s → BUFFERING LIKELY"
+                            )
+                            _segment_events.append({
+                                "time": time.time(), "user": user_name,
+                                "type": "slow", "elapsed": round(elapsed, 2),
+                                "size_kb": round(size_kb), "mbps": round(speed_mbps, 1),
+                                "seg": seg_name
+                            })
+                        elif elapsed > 1.0:
+                            logger.info(
+                                f"🟡 DELAYED SEGMENT [{user_name}] {seg_name}: "
+                                f"{elapsed:.1f}s, {size_kb:.0f}KB, {speed_mbps:.1f}Mbit/s"
+                            )
+                            _segment_events.append({
+                                "time": time.time(), "user": user_name,
+                                "type": "delayed", "elapsed": round(elapsed, 2),
+                                "size_kb": round(size_kb), "mbps": round(speed_mbps, 1),
+                                "seg": seg_name
+                            })
+                        else:
+                            logger.debug(
+                                f"✅ segment [{user_name}] {seg_name}: "
+                                f"{elapsed:.2f}s, {size_kb:.0f}KB, {speed_mbps:.1f}Mbit/s"
+                            )
+
+                        # Keep only last 200 events
+                        if len(_segment_events) > 200:
+                            _segment_events.pop(0)
 
                         for chunk in chunks:
                             yield chunk
@@ -2040,6 +2083,18 @@ def vpn_delete_ovpn(filename: str, _=Depends(check_admin)):
     current = db.get_setting("vpn_ovpn_path", "")
     if current == path:
         db.set_setting("vpn_ovpn_path", "")
+    return {"ok": True}
+
+
+@admin_app.get("/api/segment-events")
+def get_segment_events(_=Depends(check_admin)):
+    """Return recent slow/delayed segment events for buffering diagnosis."""
+    return list(reversed(_segment_events))
+
+
+@admin_app.delete("/api/segment-events")
+def clear_segment_events(_=Depends(check_admin)):
+    _segment_events.clear()
     return {"ok": True}
 
 
