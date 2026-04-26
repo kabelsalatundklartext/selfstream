@@ -222,12 +222,48 @@ def vpn_make_transport() -> Optional[httpx.AsyncHTTPTransport]:
         return None
 
 
+SOCKS_PORT = 1080
+_socks_process: Optional[subprocess.Popen] = None
+
+
 def make_iptv_client(**kwargs) -> httpx.AsyncClient:
-    """Create an httpx client that routes through VPN tun0 if VPN is active (split-tunnel)."""
-    transport = vpn_make_transport()
-    if transport:
-        kwargs["transport"] = transport
+    """Create an httpx client that routes through SOCKS5 proxy if VPN is active (split-tunnel)."""
+    if vpn_is_running() and _socks_process is not None and _socks_process.poll() is None:
+        kwargs["proxy"] = f"socks5://127.0.0.1:{SOCKS_PORT}"
     return httpx.AsyncClient(**kwargs)
+
+
+def _start_socks_proxy(tun_ip: str):
+    """Start microsocks SOCKS5 proxy bound to tun0 IP."""
+    global _socks_process
+    if _socks_process is not None and _socks_process.poll() is None:
+        return
+    try:
+        _socks_process = subprocess.Popen(
+            ["microsocks", "-i", "127.0.0.1", "-p", str(SOCKS_PORT), "-b", tun_ip],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        logger.info(f"microsocks SOCKS5 proxy started on 127.0.0.1:{SOCKS_PORT} via {tun_ip}")
+        _vpn_log_add(f"✅ SOCKS5 Proxy gestartet auf 127.0.0.1:{SOCKS_PORT} via {tun_ip}")
+    except Exception as e:
+        logger.error(f"microsocks start failed: {e}")
+        _vpn_log_add(f"⚠️ SOCKS5 Proxy Fehler: {e}")
+
+
+def _vpn_wait_for_tun(timeout: int = 30):
+    """Wait for tun0 to be ready, then start SOCKS proxy."""
+    import time
+    start = time.time()
+    while time.time() - start < timeout:
+        tun_ip = vpn_get_tun_ip()
+        if tun_ip:
+            _vpn_log_add(f"🌐 tun0 bereit: {tun_ip}")
+            time.sleep(1)  # short wait for routing to settle
+            _start_socks_proxy(tun_ip)
+            return
+        time.sleep(0.5)
+    _vpn_log_add("⚠️ tun0 Timeout – SOCKS5 Proxy nicht gestartet")
 
 
 def get_hls_settings() -> dict:
@@ -1819,7 +1855,7 @@ def vpn_start() -> dict:
         cmd += ["--auth-user-pass", VPN_AUTH_FILE]
 
     _vpn_log = []
-    _vpn_log_add("⏳ OpenVPN wird gestartet (Split-Tunnel)…")
+    _vpn_log_add("⏳ OpenVPN wird gestartet (Split-Tunnel via SOCKS5)…")
 
     try:
         _vpn_process = subprocess.Popen(
@@ -1831,6 +1867,9 @@ def vpn_start() -> dict:
         )
         t = threading.Thread(target=_vpn_reader, args=(_vpn_process,), daemon=True)
         t.start()
+        # Wait for tun0 and start SOCKS5 proxy in background
+        w = threading.Thread(target=_vpn_wait_for_tun, daemon=True)
+        w.start()
         db.set_setting("vpn_enabled", "1")
         return {"ok": True}
     except Exception as e:
@@ -1838,7 +1877,16 @@ def vpn_start() -> dict:
 
 
 def vpn_stop() -> dict:
-    global _vpn_process
+    global _vpn_process, _socks_process
+    # Stop SOCKS proxy
+    if _socks_process is not None and _socks_process.poll() is None:
+        try:
+            _socks_process.terminate()
+            _socks_process.wait(timeout=5)
+        except Exception:
+            pass
+    _socks_process = None
+
     if not vpn_is_running():
         db.set_setting("vpn_enabled", "0")
         return {"ok": True, "msg": "VPN war nicht aktiv"}
@@ -1851,7 +1899,7 @@ def vpn_stop() -> dict:
         except Exception:
             pass
     _vpn_process = None
-    _vpn_log_add("🔴 OpenVPN gestoppt.")
+    _vpn_log_add("🔴 OpenVPN + SOCKS5 Proxy gestoppt.")
     db.set_setting("vpn_enabled", "0")
     return {"ok": True}
 
