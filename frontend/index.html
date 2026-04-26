@@ -541,7 +541,7 @@ tr:hover td{background:rgba(255,255,255,.02);}
         </div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Zeit</th><th>Benutzer</th><th>Kanal</th><th>Sendung</th><th>Dauer</th></tr></thead>
+            <thead><tr><th>Zeit</th><th>Benutzer</th><th>IP</th><th>Kanal</th><th>Sendung</th><th>Dauer</th></tr></thead>
             <tbody id="logs-tbody"></tbody>
           </table>
         </div>
@@ -1001,6 +1001,7 @@ async function loadStats() {
         return `<div class="session-row" style="padding:10px 14px;flex-wrap:nowrap;overflow:hidden;">
           <div class="live-dot active" style="flex-shrink:0;"></div>
           <strong style="flex-shrink:0;">${esc(sess.user)}</strong>
+          ${sess.ip?`<span style="font-family:var(--mono);font-size:10px;color:var(--text2);margin-left:4px;flex-shrink:0;">(${esc(sess.ip)})</span>`:''}
           <span style="color:var(--text2);margin:0 6px;flex-shrink:0;">→</span>
           <span style="font-family:var(--mono);font-size:12px;color:var(--teal);flex-shrink:0;">${esc(sess.channel)}</span>
           ${np.title?`<span style="color:var(--text2);margin:0 6px;flex-shrink:0;">·</span><span style="font-size:11px;flex-shrink:0;">📺</span><span style="font-size:11px;color:var(--teal);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;margin:0 4px;">${esc(np.title)}</span><span style="font-family:var(--mono);font-size:10px;color:var(--text2);flex-shrink:0;white-space:nowrap;">${np.start||''}–${np.stop||''}</span>`:''}
@@ -1050,6 +1051,7 @@ async function loadStats() {
             return `<tr style="border-bottom:1px solid var(--border);">
               <td style="padding:6px 8px;font-family:var(--mono);font-size:10px;white-space:nowrap;color:var(--text2);">${dateStr} ${timeStr}</td>
               <td style="padding:6px 8px;font-size:12px;">${icon} <strong>${esc(l.user_name)}</strong></td>
+              <td style="padding:6px 8px;font-family:var(--mono);font-size:10px;color:var(--text2);">${esc(l.ip||'')}</td>
               <td style="padding:6px 8px;font-family:var(--mono);font-size:11px;color:var(--teal);">${esc(l.channel)}</td>
               <td style="padding:6px 8px;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${sendung}</td>
               <td style="padding:6px 8px;font-family:var(--mono);font-size:11px;text-align:right;color:var(--text2);">${dur}</td>
@@ -1059,6 +1061,7 @@ async function loadStats() {
             <thead><tr style="border-bottom:2px solid var(--border);">
               <th style="padding:6px 8px;text-align:left;font-size:10px;color:var(--text2);font-family:var(--mono);">ZEIT</th>
               <th style="padding:6px 8px;text-align:left;font-size:10px;color:var(--text2);font-family:var(--mono);">BENUTZER</th>
+              <th style="padding:6px 8px;text-align:left;font-size:10px;color:var(--text2);font-family:var(--mono);">IP</th>
               <th style="padding:6px 8px;text-align:left;font-size:10px;color:var(--text2);font-family:var(--mono);">KANAL</th>
               <th style="padding:6px 8px;text-align:left;font-size:10px;color:var(--text2);font-family:var(--mono);">SENDUNG</th>
               <th style="padding:6px 8px;text-align:right;font-size:10px;color:var(--text2);font-family:var(--mono);">DAUER</th>
@@ -1273,7 +1276,7 @@ async function userLogs(id,name) {
   document.getElementById('ulogs-content').innerHTML=!logs.length
     ?'<div class="empty-state">Noch keine Aktivität</div>'
     :`<div class="log-panel"><table style="width:100%"><thead><tr>
-        <th>Zeit</th><th>Kanal</th><th>Sendung</th><th>Dauer</th></tr></thead><tbody>
+        <th>Zeit</th><th>IP</th><th>Kanal</th><th>Sendung</th><th>Dauer</th></tr></thead><tbody>
         ${logs.map(l=>{
           const isCatchup=l.is_catchup===1||l.is_catchup==='1';
           const icon=isCatchup?'<span style="color:var(--teal);margin-right:3px;">⏪</span>':'<span style="color:var(--green);margin-right:3px;">▶</span>';
@@ -1282,6 +1285,7 @@ async function userLogs(id,name) {
             :'<span style="color:var(--text2);">—</span>';
           return `<tr>
             <td style="font-family:var(--mono);font-size:10px;white-space:nowrap;">${fmtDate(l.started_at)}</td>
+            <td style="font-family:var(--mono);font-size:10px;color:var(--text2);white-space:nowrap;">${esc(l.ip_address||'')}</td>
             <td style="white-space:nowrap;font-size:12px;">${icon}${esc(l.channel)}</td>
             <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${sendung}</td>
             <td style="font-family:var(--mono);font-size:11px;">${l.duration_seconds>0?fmtDur(l.duration_seconds):'—'}</td>
@@ -1857,7 +1861,7 @@ async function delEpg(id) {
 async function loadLogs() {
   const logs=await api('GET','/api/logs');
   const tbody=document.getElementById('logs-tbody');
-  if(!logs.length){ tbody.innerHTML='<tr><td colspan="5"><div class="empty-state">Keine Einträge</div></td></tr>'; return; }
+  if(!logs.length){ tbody.innerHTML='<tr><td colspan="6"><div class="empty-state">Keine Einträge</div></td></tr>'; return; }
   tbody.innerHTML=logs.map(l=>{
     const isCatchup=l.is_catchup===1||l.is_catchup==='1';
     const icon=isCatchup?'<span style="color:var(--teal);margin-right:4px;">⏪</span>':'<span style="color:var(--green);margin-right:4px;">▶</span>';
@@ -1867,6 +1871,7 @@ async function loadLogs() {
     return `<tr>
       <td style="font-family:var(--mono);font-size:10px;white-space:nowrap;">${fmtDate(l.started_at)}</td>
       <td><strong>${esc(l.user_name)}</strong></td>
+      <td style="font-family:var(--mono);font-size:10px;color:var(--text2);white-space:nowrap;">${esc(l.ip||'')}</td>
       <td style="white-space:nowrap;font-size:12px;">${icon}${esc(l.channel)}</td>
       <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${sendung}</td>
       <td style="font-family:var(--mono);font-size:11px;">${l.duration_seconds>0?fmtDur(l.duration_seconds):'—'}</td>
