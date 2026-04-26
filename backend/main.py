@@ -1857,20 +1857,28 @@ async def get_vpn_status(_=Depends(check_admin)):
 
 @admin_app.post("/api/vpn/upload")
 async def vpn_upload_ovpn(request: Request, _=Depends(check_admin)):
-    os.makedirs(VPN_OVPN_DIR, exist_ok=True)
-    form = await request.form()
-    file = form.get("file")
-    if not file:
-        raise HTTPException(status_code=400, detail="Keine Datei")
-    filename = os.path.basename(file.filename)
-    if not filename.endswith(".ovpn"):
-        raise HTTPException(status_code=400, detail="Nur .ovpn Dateien erlaubt")
-    dest = os.path.join(VPN_OVPN_DIR, filename)
-    content = await file.read()
-    with open(dest, "wb") as f:
-        f.write(content)
-    db.set_setting("vpn_ovpn_path", dest)
-    return {"ok": True, "filename": filename, "path": dest}
+    try:
+        os.makedirs(VPN_OVPN_DIR, exist_ok=True)
+        form = await request.form()
+        file = form.get("file")
+        if not file:
+            raise HTTPException(status_code=400, detail="Keine Datei")
+        filename = os.path.basename(file.filename)
+        if not filename.endswith(".ovpn"):
+            raise HTTPException(status_code=400, detail="Nur .ovpn Dateien erlaubt")
+        dest = os.path.join(VPN_OVPN_DIR, filename)
+        content = await file.read()
+        with open(dest, "wb") as f:
+            f.write(content)
+        os.chmod(dest, 0o600)
+        db.set_setting("vpn_ovpn_path", dest)
+        logger.info(f"VPN: ovpn uploaded to {dest}")
+        return {"ok": True, "filename": filename, "path": dest}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"VPN upload error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @admin_app.delete("/api/vpn/ovpn/{filename}")
