@@ -688,8 +688,11 @@ def get_prefetch_count() -> int:
 _prefetch_cache = _segment_cache
 
 
-async def _get_segment(url: str, hls: dict) -> bytes:
-    """Download a segment, sharing the result if another coroutine is already fetching it."""
+_segment_cache_elapsed: dict = {}  # {url: elapsed_seconds} – original download time
+
+async def _get_segment(url: str, hls: dict) -> tuple:
+    """Download a segment, sharing the result if another coroutine is already fetching it.
+    Returns (data: bytes, elapsed: float) where elapsed is the original download time."""
     now = time.time()
 
     # Clean expired cache entries
@@ -697,22 +700,24 @@ async def _get_segment(url: str, hls: dict) -> bytes:
     for u in expired:
         _segment_cache.pop(u, None)
         _segment_cache_time.pop(u, None)
+        _segment_cache_elapsed.pop(u, None)
 
-    # Cache hit
+    # Cache hit – return instantly but with original download time
     if url in _segment_cache:
-        return _segment_cache[url]
+        return _segment_cache[url], _segment_cache_elapsed.get(url, 0.0)
 
     # Another coroutine is already fetching this segment – wait for it
     if url in _segment_in_progress:
         evt = _segment_in_progress[url]
         await asyncio.wait_for(evt.wait(), timeout=30)
-        return _segment_cache.get(url, b"")
+        return _segment_cache.get(url, b""), _segment_cache_elapsed.get(url, 0.0)
 
     # We are the first – fetch it
     evt = asyncio.Event()
     _segment_in_progress[url] = evt
     try:
         buf = bytearray()
+        t_start = time.time()
         async with make_iptv_client(
             timeout=httpx.Timeout(hls["hls_timeout"], read=hls["hls_read_timeout"]),
             follow_redirects=hls["hls_follow_redirects"],
@@ -722,16 +727,18 @@ async def _get_segment(url: str, hls: dict) -> bytes:
                 if resp.status_code == 200:
                     async for chunk in resp.aiter_bytes(chunk_size=131072):
                         buf.extend(chunk)
+        elapsed = time.time() - t_start
         data = bytes(buf)
         if len(data) > 100:
             _segment_cache[url] = data
             _segment_cache_time[url] = now
-            # Limit cache size
+            _segment_cache_elapsed[url] = elapsed
             while len(_segment_cache) > SEGMENT_CACHE_MAX:
                 oldest = min(_segment_cache_time, key=_segment_cache_time.get)
                 _segment_cache.pop(oldest, None)
                 _segment_cache_time.pop(oldest, None)
-        return data
+                _segment_cache_elapsed.pop(oldest, None)
+        return data, elapsed
     finally:
         _segment_in_progress.pop(url, None)
         evt.set()
@@ -745,7 +752,6 @@ async def _prefetch_segment(url: str, hls: dict):
         await _get_segment(url, hls)
     except Exception:
         pass
-
 # Catchup session tracking (log_id → {start, last_seen, token})
 _catchup_sessions: dict = {}
 CATCHUP_TTL = 60  # seconds without segment = catchup done
@@ -920,12 +926,9 @@ async def proxy_segment(token: str, url: str, sid: str = None, catchup: str = No
                     yield rewritten.encode()
                     return
                 else:
-                    # Check shared cache first - instant delivery if already loaded by another user
-                    # or prefetched in background
                     for attempt in range(2):
                         t_start = time.time()
-                        data = await _get_segment(decoded_url, hls)
-                        elapsed = time.time() - t_start
+                        data, elapsed = await _get_segment(decoded_url, hls)
                         total = len(data)
 
                         # Track empty/tiny segments - these cause playback gaps
