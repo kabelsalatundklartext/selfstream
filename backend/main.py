@@ -637,16 +637,18 @@ async def proxy_stream(token: str, url: str, utc: str = None, lutc: str = None, 
         try:
             base_url = "/".join(decoded_url.split("/")[:-1])
             seg_urls = []
+            prefetch_count = get_prefetch_count()
             for line in playlist_content.splitlines():
                 line = line.strip()
                 if line and not line.startswith("#") and (".ts" in line or ".aac" in line):
                     full_url = line if line.startswith("http") else f"{base_url}/{line}"
                     if full_url not in _prefetch_cache:
                         seg_urls.append(full_url)
-                    if len(seg_urls) >= 2:
+                    if len(seg_urls) >= prefetch_count:
                         break
-            for seg_url in seg_urls:
-                asyncio.create_task(_prefetch_segment(seg_url, hls))
+            if prefetch_count > 0:
+                for seg_url in seg_urls:
+                    asyncio.create_task(_prefetch_segment(seg_url, hls))
         except Exception:
             pass
         return HTMLResponse(
@@ -674,6 +676,13 @@ _segment_cache_time: dict = {}  # {url: timestamp}
 _segment_in_progress: dict = {}  # {url: asyncio.Event} – deduplication lock
 SEGMENT_CACHE_MAX = 20
 SEGMENT_CACHE_TTL = 30  # seconds
+
+def get_prefetch_count() -> int:
+    """How many segments to prefetch ahead. 0 = disabled."""
+    try:
+        return int(db.get_setting("prefetch_segments", "2"))
+    except Exception:
+        return 2
 
 # Keep _prefetch_cache as alias for compatibility
 _prefetch_cache = _segment_cache
@@ -1827,6 +1836,7 @@ def get_settings(_=Depends(check_admin)):
         "short_domain":         s.get("short_domain", ""),
         "m3u_refresh_hours":    s.get("m3u_refresh_hours", "0"),
         "m3u_last_refresh":     s.get("m3u_last_refresh", ""),
+        "prefetch_segments":    s.get("prefetch_segments", "2"),
     }
 
 @admin_app.post("/api/settings")
@@ -1835,7 +1845,7 @@ def update_settings(body: dict, _=Depends(check_admin)):
                "hls_timeout", "hls_read_timeout", "hls_chunk_size",
                "hls_user_agent", "hls_referer", "hls_follow_redirects",
                "epg_refresh_hours", "epg_filter_channels", "log_retention_days",
-               "short_domain", "m3u_refresh_hours", "group_sort_prefix"}
+               "short_domain", "m3u_refresh_hours", "group_sort_prefix", "prefetch_segments"}
     for key, val in body.items():
         if key in allowed:
             db.set_setting(key, str(val))
