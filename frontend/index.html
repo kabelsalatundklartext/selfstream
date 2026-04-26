@@ -864,7 +864,11 @@ tr:hover td{background:rgba(255,255,255,.02);}
         <div class="scard" style="margin-top:16px;">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
             <div class="scard-title" style="margin:0;">⚠️ Buffering-Ereignisse</div>
-            <div style="display:flex;gap:8px;">
+            <div style="display:flex;gap:8px;align-items:center;">
+              <label style="display:flex;align-items:center;gap:6px;font-size:11px;cursor:pointer;">
+                <input type="checkbox" id="tr-debug-mode" style="accent-color:var(--teal);" onchange="toggleDebugMode(this)">
+                <span style="color:var(--text2);">🔬 Debug (alle Segmente)</span>
+              </label>
               <button class="refresh-btn" onclick="loadSegmentEvents()">↻ Refresh</button>
               <button class="btn sm danger" onclick="clearSegmentEvents()">🗑 Löschen</button>
             </div>
@@ -2450,6 +2454,12 @@ let _trafficPeak = 0;
 const ASSUMED_MBPS_PER_STREAM = 6;
 const TRAFFIC_MAX_POINTS = 720; // up to 720 data points (1h @ 5s = 720)
 
+async function toggleDebugMode(checkbox) {
+  await api('POST', '/api/settings', { segment_debug: checkbox.checked ? '1' : '0' });
+  showToast(checkbox.checked ? '🔬 Debug-Modus AN – alle Segmente werden geloggt' : 'Debug-Modus AUS');
+  loadSegmentEvents();
+}
+
 async function loadSegmentEvents() {
   const [events, stats] = await Promise.all([
     api('GET', '/api/segment-events'),
@@ -2517,9 +2527,10 @@ async function loadSegmentEvents() {
     </tr></thead>
     <tbody>${events.map(e => {
       const isSlow = e.type === 'slow';
+      const isOk = e.type === 'ok';
       const isEmpty = e.seg && e.seg.startsWith('⚠️ LEER');
-      const color = isEmpty ? '#ff6b6b' : isSlow ? '#ef4444' : '#f59e0b';
-      const icon = isEmpty ? '⚠️' : isSlow ? '🔴' : '🟡';
+      const color = isEmpty ? '#ff6b6b' : isSlow ? '#ef4444' : isOk ? '#00e5c8' : '#f59e0b';
+      const icon = isEmpty ? '⚠️' : isSlow ? '🔴' : isOk ? '✅' : '🟡';
       const dt = new Date(e.time * 1000);
       const timeStr = dt.toLocaleTimeString('de-DE', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
       return `<tr style="border-bottom:1px solid var(--border);${isEmpty ? 'background:rgba(255,107,107,0.05);' : ''}">
