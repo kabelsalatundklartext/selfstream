@@ -805,7 +805,7 @@ async def proxy_segment(token: str, url: str, sid: str = None, catchup: str = No
             _sessions[session_key] = {
                 "channel": channel_name, "log_id": log_id, "start": now,
                 "last_seen": now, "user_id": user_id, "token": token, "session_key": session_key,
-                "epg_title": epg_title_now
+                "epg_title": epg_title_now, "user_name": user["name"]
             }
             logger.info(f"Session started: {user['name']} ({client_ip}) → {channel_name}")
 
@@ -852,7 +852,7 @@ async def proxy_segment(token: str, url: str, sid: str = None, catchup: str = No
                         size_kb = total / 1024
                         speed_mbps = (total * 8) / (elapsed * 1_000_000) if elapsed > 0 else 0
                         seg_name = decoded_url.split("/")[-1].split("?")[0]
-                        user_name = _sessions.get(session_key, {}).get("user_name", token[:8])
+                        user_name = _sessions.get(session_key, {}).get("user_name") or token[:8]
                         if elapsed > 2.0:
                             logger.warning(
                                 f"⚠️ SLOW SEGMENT [{user_name}] {seg_name}: "
