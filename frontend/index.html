@@ -2110,7 +2110,7 @@ async function vpnUpload(input) {
   fd.append('file', file);
   const resp = await fetch('/api/vpn/upload', {
     method: 'POST',
-    headers: { 'X-Admin-Token': localStorage.getItem('adminToken') || '' },
+    headers: { 'X-Admin-Token': TOKEN },
     body: fd,
   });
   const data = await resp.json();
