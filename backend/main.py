@@ -1340,7 +1340,7 @@ async def import_channels(body: dict, _=Depends(check_admin)):
     # Optionally update all existing users to use the new M3U URL
     updated_users = 0
     if update_users:
-        users = db.get_users()
+        users = db.get_all_users()
         for u in users:
             db.update_user(u["id"], {"m3u_source": url})
             updated_users += 1
