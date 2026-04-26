@@ -855,6 +855,16 @@ tr:hover td{background:rgba(255,255,255,.02);}
       <input class="form-input" id="import-url" placeholder="http://anbieter.tv/get.php?…">
       <div class="form-hint">URL wird gespeichert und kann später neu geladen werden.</div>
     </div>
+    <div class="form-group" style="background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:12px;">
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;">
+        <input type="checkbox" id="import-update-users" checked style="width:16px;height:16px;accent-color:var(--teal);">
+        <span style="font-size:13px;">Alle bestehenden User auf neue URL umstellen</span>
+      </label>
+      <div class="form-hint" style="margin-top:6px;">
+        ⚠️ Empfohlen wenn du den Anbieter wechselst oder eine neue M3U-URL hast.<br>
+        Deaktivieren wenn du nur die Kanalliste aktualisieren willst.
+      </div>
+    </div>
     <div class="modal-actions">
       <button class="btn" onclick="closeM('modal-import')">Abbrechen</button>
       <button class="btn primary" id="import-btn" onclick="doImport()">Importieren</button>
@@ -1721,14 +1731,19 @@ async function grpToggle(val) {
 function openImport(){ document.getElementById('modal-import').classList.add('open'); }
 
 async function doImport() {
-  const url=document.getElementById('import-url').value.trim();
-  if(!url) return showToast('URL erforderlich',true);
-  document.getElementById('import-btn').disabled=true;
+  const url = document.getElementById('import-url').value.trim();
+  if (!url) return showToast('URL erforderlich', true);
+  const updateUsers = document.getElementById('import-update-users')?.checked ?? true;
+  document.getElementById('import-btn').disabled = true;
   try {
-    const r=await api('POST','/api/channels/import',{url});
-    closeM('modal-import'); showToast(`${r.imported} Kanäle importiert!`); loadCh();
-  } catch(e){ showToast(e.message,true); }
-  finally{ document.getElementById('import-btn').disabled=false; }
+    const r = await api('POST', '/api/channels/import', {url, update_users: updateUsers});
+    closeM('modal-import');
+    let msg = `${r.imported} Kanäle importiert!`;
+    if (updateUsers && r.updated_users > 0) msg += ` • ${r.updated_users} User auf neue URL umgestellt`;
+    showToast(msg);
+    loadCh();
+  } catch(e) { showToast(e.message, true); }
+  finally { document.getElementById('import-btn').disabled = false; }
 }
 
 async function refreshCh() {
