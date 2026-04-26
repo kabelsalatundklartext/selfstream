@@ -8,6 +8,7 @@ import httpx
 import asyncio
 import logging
 import threading
+import subprocess
 import urllib.parse
 import re
 import xml.etree.ElementTree as ET
@@ -1753,9 +1754,6 @@ async def delete_logo(body: dict, _=Depends(check_admin)):
 
 
 # ── VPN (OpenVPN) Integration ──────────────────────────────────────────────────
-
-import subprocess
-import shutil
 
 VPN_SETTINGS_KEYS = {
     "vpn_enabled", "vpn_user", "vpn_password", "vpn_ovpn_path"
