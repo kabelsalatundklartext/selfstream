@@ -959,6 +959,7 @@ async def proxy_segment(token: str, url: str, sid: str = None, catchup: str = No
                         seg_name = decoded_url.split("/")[-1].split("?")[0]
                         user_name = _sessions.get(session_key, {}).get("user_name") or token[:8]
                         channel_name = _sessions.get(session_key, {}).get("channel", "")
+                        debug_mode = db.get_setting("segment_debug", "0") == "1"
 
                         if elapsed > 2.0:
                             logger.warning(
@@ -981,6 +982,15 @@ async def proxy_segment(token: str, url: str, sid: str = None, catchup: str = No
                                 "time": time.time(), "user": user_name,
                                 "channel": channel_name,
                                 "type": "delayed", "elapsed": round(elapsed, 2),
+                                "size_kb": round(size_kb), "mbps": round(speed_mbps, 1),
+                                "seg": seg_name
+                            })
+                        elif debug_mode:
+                            # Debug mode: log ALL segments including fast ones
+                            _segment_events.append({
+                                "time": time.time(), "user": user_name,
+                                "channel": channel_name,
+                                "type": "ok", "elapsed": round(elapsed, 2),
                                 "size_kb": round(size_kb), "mbps": round(speed_mbps, 1),
                                 "seg": seg_name
                             })
@@ -1840,6 +1850,7 @@ def get_settings(_=Depends(check_admin)):
         "m3u_refresh_hours":    s.get("m3u_refresh_hours", "0"),
         "m3u_last_refresh":     s.get("m3u_last_refresh", ""),
         "prefetch_segments":    s.get("prefetch_segments", "2"),
+        "segment_debug":        s.get("segment_debug", "0"),
     }
 
 @admin_app.post("/api/settings")
@@ -1848,7 +1859,7 @@ def update_settings(body: dict, _=Depends(check_admin)):
                "hls_timeout", "hls_read_timeout", "hls_chunk_size",
                "hls_user_agent", "hls_referer", "hls_follow_redirects",
                "epg_refresh_hours", "epg_filter_channels", "log_retention_days",
-               "short_domain", "m3u_refresh_hours", "group_sort_prefix", "prefetch_segments"}
+               "short_domain", "m3u_refresh_hours", "group_sort_prefix", "prefetch_segments", "segment_debug"}
     for key, val in body.items():
         if key in allowed:
             db.set_setting(key, str(val))
