@@ -2148,6 +2148,50 @@ def get_segment_events(_=Depends(check_admin)):
     return list(reversed(_segment_events))
 
 
+@admin_app.get("/api/segment-events")
+def get_segment_events(_=Depends(check_admin)):
+    """Return recent slow/delayed segment events for buffering diagnosis."""
+    return list(reversed(_segment_events))
+
+
+@admin_app.get("/api/segment-events/stats")
+def get_segment_stats(_=Depends(check_admin)):
+    """Aggregate buffering stats per channel for provider evidence report."""
+    from collections import defaultdict
+    stats = defaultdict(lambda: {
+        "channel": "", "slow": 0, "delayed": 0, "total": 0,
+        "elapsed_sum": 0.0, "mbps_sum": 0.0, "min_mbps": 999.0
+    })
+    for e in _segment_events:
+        ch = e.get("channel", "Unbekannt") or "Unbekannt"
+        s = stats[ch]
+        s["channel"] = ch
+        s["total"] += 1
+        if e["type"] == "slow":
+            s["slow"] += 1
+        else:
+            s["delayed"] += 1
+        s["elapsed_sum"] += e["elapsed"]
+        s["mbps_sum"] += e["mbps"]
+        if e["mbps"] < s["min_mbps"]:
+            s["min_mbps"] = e["mbps"]
+    result = []
+    for ch, s in stats.items():
+        if s["total"] > 0:
+            result.append({
+                "channel": ch,
+                "slow": s["slow"],
+                "delayed": s["delayed"],
+                "total": s["total"],
+                "avg_elapsed": round(s["elapsed_sum"] / s["total"], 2),
+                "avg_mbps": round(s["mbps_sum"] / s["total"], 1),
+                "min_mbps": round(s["min_mbps"], 1),
+                "score": s["slow"] * 2 + s["delayed"],
+            })
+    result.sort(key=lambda x: x["score"], reverse=True)
+    return result
+
+
 @admin_app.delete("/api/segment-events")
 def clear_segment_events(_=Depends(check_admin)):
     _segment_events.clear()
