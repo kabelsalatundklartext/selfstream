@@ -836,9 +836,25 @@ tr:hover td{background:rgba(255,255,255,.02);}
             <span>Jetzt →</span>
           </div>
         </div>
+        <!-- Buffering Events -->
+        <div class="scard" style="margin-top:16px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+            <div class="scard-title" style="margin:0;">⚠️ Buffering-Ereignisse</div>
+            <div style="display:flex;gap:8px;">
+              <button class="refresh-btn" onclick="loadSegmentEvents()">↻ Refresh</button>
+              <button class="btn sm danger" onclick="clearSegmentEvents()">🗑 Löschen</button>
+            </div>
+          </div>
+          <div class="form-hint" style="margin-bottom:10px;">
+            🔴 <strong>Langsam (&gt;2s)</strong> = Buffering sehr wahrscheinlich &nbsp;|&nbsp;
+            🟡 <strong>Verzögert (&gt;1s)</strong> = Buffering möglich &nbsp;|&nbsp;
+            Normale Segmente werden nicht angezeigt
+          </div>
+          <div id="tr-seg-events" style="font-family:var(--mono);font-size:11px;">
+            <div class="empty-state">Noch keine Ereignisse – tritt auf wenn ein Segment &gt;1s braucht</div>
+          </div>
+        </div>
       </div>
-
-<!-- Add User Modal -->
 <div class="modal-bg" id="modal-adduser">
   <div class="modal">
     <div class="modal-title">Benutzer anlegen</div>
@@ -2408,6 +2424,46 @@ let _trafficPeak = 0;
 const ASSUMED_MBPS_PER_STREAM = 6;
 const TRAFFIC_MAX_POINTS = 720; // up to 720 data points (1h @ 5s = 720)
 
+async function loadSegmentEvents() {
+  const events = await api('GET', '/api/segment-events');
+  const el = document.getElementById('tr-seg-events');
+  if (!el) return;
+  if (!events?.length) {
+    el.innerHTML = '<div class="empty-state">Noch keine Ereignisse – tritt auf wenn ein Segment &gt;1s braucht</div>';
+    return;
+  }
+  el.innerHTML = `<table style="width:100%;border-collapse:collapse;">
+    <thead><tr style="border-bottom:1px solid var(--border);">
+      <th style="padding:4px 8px;text-align:left;font-size:9px;color:var(--text2);">ZEIT</th>
+      <th style="padding:4px 8px;text-align:left;font-size:9px;color:var(--text2);">USER</th>
+      <th style="padding:4px 8px;text-align:left;font-size:9px;color:var(--text2);">DAUER</th>
+      <th style="padding:4px 8px;text-align:left;font-size:9px;color:var(--text2);">GRÖSSE</th>
+      <th style="padding:4px 8px;text-align:left;font-size:9px;color:var(--text2);">SPEED</th>
+      <th style="padding:4px 8px;text-align:left;font-size:9px;color:var(--text2);">SEGMENT</th>
+    </tr></thead>
+    <tbody>${events.map(e => {
+      const isSlow = e.type === 'slow';
+      const color = isSlow ? '#ef4444' : '#f59e0b';
+      const icon = isSlow ? '🔴' : '🟡';
+      const dt = new Date(e.time * 1000);
+      const timeStr = dt.toLocaleTimeString('de-DE', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+      return `<tr style="border-bottom:1px solid var(--border);">
+        <td style="padding:4px 8px;color:var(--text2);">${timeStr}</td>
+        <td style="padding:4px 8px;"><strong>${esc(e.user)}</strong></td>
+        <td style="padding:4px 8px;color:${color};font-weight:bold;">${icon} ${e.elapsed}s</td>
+        <td style="padding:4px 8px;color:var(--text2);">${e.size_kb} KB</td>
+        <td style="padding:4px 8px;color:${e.mbps < 4 ? '#ef4444' : 'var(--teal)'};">${e.mbps} Mbit/s</td>
+        <td style="padding:4px 8px;color:var(--text2);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(e.seg)}</td>
+      </tr>`;
+    }).join('')}</tbody>
+  </table>`;
+}
+
+async function clearSegmentEvents() {
+  await api('DELETE', '/api/segment-events');
+  loadSegmentEvents();
+}
+
 function stopTrafficMonitor() {
   if (_trafficInterval) { clearInterval(_trafficInterval); _trafficInterval = null; }
 }
@@ -2415,8 +2471,12 @@ function stopTrafficMonitor() {
 async function startTrafficMonitor() {
   stopTrafficMonitor();
   await updateTraffic();
+  await loadSegmentEvents();
   const secs = parseInt(document.getElementById('traffic-interval')?.value || '5');
-  _trafficInterval = setInterval(updateTraffic, secs * 1000);
+  _trafficInterval = setInterval(async () => {
+    await updateTraffic();
+    await loadSegmentEvents();
+  }, secs * 1000);
 }
 
 async function updateTraffic() {
