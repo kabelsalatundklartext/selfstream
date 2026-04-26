@@ -1730,7 +1730,16 @@ def _vpn_reader(proc: subprocess.Popen):
 
 def vpn_is_running() -> bool:
     global _vpn_process
-    return _vpn_process is not None and _vpn_process.poll() is None
+    # Check process is alive
+    if _vpn_process is not None and _vpn_process.poll() is None:
+        return True
+    # Fallback: check if tun0 interface exists
+    try:
+        result = subprocess.run(["ip", "link", "show", "tun0"],
+                                capture_output=True, timeout=2)
+        return result.returncode == 0
+    except Exception:
+        return False
 
 
 def vpn_start() -> dict:
@@ -1841,13 +1850,15 @@ async def get_vpn_status(_=Depends(check_admin)):
     running = vpn_is_running()
     public_ip = ""
     if running:
-        try:
-            async with httpx.AsyncClient(timeout=5) as client:
-                r = await client.get("https://ifconfig.me/ip")
-                if r.status_code == 200:
-                    public_ip = r.text.strip()
-        except Exception:
-            pass
+        for url in ["https://ifconfig.me/ip", "https://api.ipify.org", "https://checkip.amazonaws.com"]:
+            try:
+                async with httpx.AsyncClient(timeout=8) as client:
+                    r = await client.get(url)
+                    if r.status_code == 200:
+                        public_ip = r.text.strip()
+                        break
+            except Exception:
+                continue
     return {
         "running": running,
         "public_ip": public_ip,
