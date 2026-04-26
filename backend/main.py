@@ -1684,3 +1684,65 @@ async def delete_logo(body: dict, _=Depends(check_admin)):
     if os.path.exists(filename):
         os.remove(filename)
     return {"ok": True}
+
+
+# ── VPN (gluetun) Integration ─────────────────────────────────────────────────
+
+VPN_SETTINGS_KEYS = {
+    "vpn_enabled", "vpn_provider", "vpn_type", "vpn_user", "vpn_password",
+    "vpn_country", "vpn_custom_config", "vpn_protocol", "vpn_gluetun_host"
+}
+
+@admin_app.get("/api/vpn")
+def get_vpn_settings(_=Depends(check_admin)):
+    s = db.get_all_settings()
+    return {
+        "vpn_enabled":       s.get("vpn_enabled", "0"),
+        "vpn_provider":      s.get("vpn_provider", "expressvpn"),
+        "vpn_type":          s.get("vpn_type", "openvpn"),
+        "vpn_user":          s.get("vpn_user", ""),
+        "vpn_password":      s.get("vpn_password", ""),
+        "vpn_country":       s.get("vpn_country", ""),
+        "vpn_protocol":      s.get("vpn_protocol", "udp"),
+        "vpn_custom_config": s.get("vpn_custom_config", ""),
+        "vpn_gluetun_host":  s.get("vpn_gluetun_host", ""),
+    }
+
+@admin_app.post("/api/vpn")
+def update_vpn_settings(body: dict, _=Depends(check_admin)):
+    for key, val in body.items():
+        if key in VPN_SETTINGS_KEYS:
+            db.set_setting(key, str(val))
+    return {"ok": True}
+
+@admin_app.get("/api/vpn/status")
+async def get_vpn_status(_=Depends(check_admin)):
+    """Check gluetun status and public IP via its control API."""
+    gluetun_host = db.get_setting("vpn_gluetun_host", "")
+    if not gluetun_host:
+        return {"connected": False, "error": "Kein gluetun Host konfiguriert"}
+    gluetun_host = gluetun_host.rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            # Check VPN state
+            r = await client.get(f"{gluetun_host}/v1/openvpn/status")
+            state_data = r.json() if r.status_code == 200 else {}
+            status = state_data.get("status", "unknown")
+
+            # Get public IP
+            ip_data = {}
+            try:
+                r2 = await client.get(f"{gluetun_host}/v1/publicip/ip")
+                ip_data = r2.json() if r2.status_code == 200 else {}
+            except Exception:
+                pass
+
+            return {
+                "connected": status == "running",
+                "status": status,
+                "public_ip": ip_data.get("public_ip", ""),
+                "country": ip_data.get("country", ""),
+                "city": ip_data.get("city", ""),
+            }
+    except Exception as e:
+        return {"connected": False, "error": str(e)}
