@@ -1325,6 +1325,7 @@ def remove_channel_from_group(group_id: int, channel_id: int, _=Depends(check_ad
 @admin_app.post("/api/channels/import")
 async def import_channels(body: dict, _=Depends(check_admin)):
     url = body.get("url", "").strip()
+    update_users = body.get("update_users", False)
     if not url:
         raise HTTPException(status_code=400, detail="url required")
     db.set_setting("source_m3u_url", url)
@@ -1336,7 +1337,14 @@ async def import_channels(body: dict, _=Depends(check_admin)):
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Failed to fetch M3U: {e}")
     db.upsert_channels(channels)
-    return {"ok": True, "imported": len(channels)}
+    # Optionally update all existing users to use the new M3U URL
+    updated_users = 0
+    if update_users:
+        users = db.get_users()
+        for u in users:
+            db.update_user(u["id"], {"m3u_source": url})
+            updated_users += 1
+    return {"ok": True, "imported": len(channels), "updated_users": updated_users}
 
 @admin_app.post("/api/channels/refresh")
 async def refresh_channels(_=Depends(check_admin)):
