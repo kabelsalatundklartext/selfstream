@@ -7,6 +7,12 @@ LABEL org.opencontainers.image.licenses="GPL-3.0"
 
 WORKDIR /app
 
+# Install OpenVPN
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    openvpn \
+    iproute2 \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
