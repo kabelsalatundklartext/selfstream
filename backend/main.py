@@ -2004,3 +2004,61 @@ def vpn_delete_ovpn(filename: str, _=Depends(check_admin)):
     if current == path:
         db.set_setting("vpn_ovpn_path", "")
     return {"ok": True}
+
+
+@admin_app.get("/api/vpn/speedtest")
+async def vpn_speedtest(_=Depends(check_admin)):
+    """Run a download speedtest using a public test file, routed through VPN if active."""
+    import time
+
+    # Test URLs - verschiedene Größen für genaue Messung
+    test_urls = [
+        "https://speed.cloudflare.com/__down?bytes=10000000",   # 10 MB Cloudflare
+        "https://bouygues.testdebit.info/10M.iso",              # 10 MB Bouygues
+        "https://proof.ovh.net/files/10Mb.dat",                # 10 MB OVH
+    ]
+
+    results = []
+    for url in test_urls:
+        try:
+            start = time.monotonic()
+            downloaded = 0
+            async with make_iptv_client(timeout=httpx.Timeout(5, read=30), follow_redirects=True) as client:
+                async with client.stream("GET", url) as resp:
+                    if resp.status_code != 200:
+                        continue
+                    async for chunk in resp.aiter_bytes(chunk_size=65536):
+                        downloaded += len(chunk)
+                        # Stop after 10MB or 8 seconds
+                        if downloaded >= 10_000_000 or (time.monotonic() - start) > 8:
+                            break
+            elapsed = time.monotonic() - start
+            if elapsed > 0 and downloaded > 100_000:
+                mbps = (downloaded * 8) / (elapsed * 1_000_000)
+                results.append({"url": url, "mbps": round(mbps, 2), "mb": round(downloaded/1_000_000, 1), "seconds": round(elapsed, 1)})
+                break  # First successful test is enough
+        except Exception as e:
+            logger.warning(f"Speedtest {url} failed: {e}")
+            continue
+
+    if not results:
+        return {"ok": False, "error": "Alle Testserver nicht erreichbar"}
+
+    best = results[0]
+    # Estimate concurrent streams (assume ~4 Mbit/s per HD stream)
+    streams_hd   = int(best["mbps"] / 4)
+    streams_fhd  = int(best["mbps"] / 8)
+    streams_4k   = int(best["mbps"] / 25)
+
+    return {
+        "ok": True,
+        "mbps": best["mbps"],
+        "mb_downloaded": best["mb"],
+        "seconds": best["seconds"],
+        "via_vpn": vpn_is_running(),
+        "streams": {
+            "hd_720p":  streams_hd,
+            "fhd_1080p": streams_fhd,
+            "uhd_4k":   streams_4k,
+        }
+    }
