@@ -41,7 +41,7 @@ async def _fetch_and_cache_epg():
         if not epg_sources:
             return False
         source_url = epg_sources[0]
-        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+        async with make_iptv_client(timeout=120, follow_redirects=True) as client:
             resp = await client.get(source_url)
             resp.raise_for_status()
             content = resp.text
@@ -107,7 +107,7 @@ async def _m3u_watchdog():
                 if url:
                     logger.info("M3U watchdog: refreshing channels...")
                     try:
-                        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+                        async with make_iptv_client(timeout=60, follow_redirects=True) as client:
                             resp = await client.get(url)
                             resp.raise_for_status()
                             channels = parse_m3u(resp.text)
@@ -208,6 +208,28 @@ def _generate_error_video():
         logger.warning(f"Error image generation failed: {e}")
 
 
+def vpn_make_transport() -> Optional[httpx.AsyncHTTPTransport]:
+    """Return an httpx transport bound to tun0 IP for split-tunnel VPN routing."""
+    if not vpn_is_running():
+        return None
+    tun_ip = vpn_get_tun_ip()
+    if not tun_ip:
+        return None
+    try:
+        return httpx.AsyncHTTPTransport(local_address=tun_ip)
+    except Exception as e:
+        logger.warning(f"VPN transport error: {e}")
+        return None
+
+
+def make_iptv_client(**kwargs) -> httpx.AsyncClient:
+    """Create an httpx client that routes through VPN tun0 if VPN is active (split-tunnel)."""
+    transport = vpn_make_transport()
+    if transport:
+        kwargs["transport"] = transport
+    return httpx.AsyncClient(**kwargs)
+
+
 def get_hls_settings() -> dict:
     return {
         "hls_timeout":        int(db.get_setting("hls_timeout", "10")),
@@ -272,7 +294,7 @@ async def serve_playlist(token: str):
     if not channels:
         try:
             hls = get_hls_settings()
-            async with httpx.AsyncClient(timeout=30, headers=make_headers(hls)) as client:
+            async with make_iptv_client(timeout=30, headers=make_headers(hls)) as client:
                 resp = await client.get(user["m3u_source"])
                 resp.raise_for_status()
                 channels_raw = parse_m3u(resp.text)
@@ -355,7 +377,7 @@ async def serve_epg(token: str):
     if not epg_sources:
         raise HTTPException(status_code=404, detail="No EPG source configured")
     try:
-        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+        async with make_iptv_client(timeout=60, follow_redirects=True) as client:
             resp = await client.get(epg_sources[0])
             resp.raise_for_status()
             return HTMLResponse(content=resp.text, media_type="application/xml")
@@ -462,7 +484,7 @@ async def proxy_stream(token: str, url: str, utc: str = None, lutc: str = None, 
             ch_token = decoded_url.split("token=")[-1] if "token=" in decoded_url else ""
             archive_url = f"{base_cdn}/index.m3u8?token={ch_token}&utc={utc}"
 
-            async with httpx.AsyncClient(
+            async with make_iptv_client(
                 timeout=httpx.Timeout(hls["hls_timeout"], read=hls["hls_read_timeout"]),
                 follow_redirects=True,
                 headers=make_headers(hls)
@@ -553,7 +575,7 @@ async def proxy_stream(token: str, url: str, utc: str = None, lutc: str = None, 
             raise HTTPException(status_code=429, detail="Max. Streams erreicht.")
 
     try:
-        async with httpx.AsyncClient(
+        async with make_iptv_client(
             timeout=httpx.Timeout(hls["hls_timeout"], read=hls["hls_read_timeout"]),
             follow_redirects=hls["hls_follow_redirects"],
             headers=make_headers(hls)
@@ -661,7 +683,7 @@ async def proxy_segment(token: str, url: str, sid: str = None, catchup: str = No
                 break
         try:
             timeout = httpx.Timeout(hls["hls_timeout"], read=hls["hls_read_timeout"])
-            async with httpx.AsyncClient(timeout=timeout, follow_redirects=hls["hls_follow_redirects"], headers=make_headers(hls)) as client:
+            async with make_iptv_client(timeout=timeout, follow_redirects=hls["hls_follow_redirects"], headers=make_headers(hls)) as client:
                 if not is_ts:
                     # Sub-playlist (m3u8): rewrite segment URLs so they also carry catchup=1
                     resp = await client.get(decoded_url)
@@ -673,7 +695,7 @@ async def proxy_segment(token: str, url: str, sid: str = None, catchup: str = No
                     # Actual TS segment: stream through directly
                     async def stream_catchup_ts():
                         try:
-                            async with httpx.AsyncClient(timeout=timeout, follow_redirects=hls["hls_follow_redirects"], headers=make_headers(hls)) as c2:
+                            async with make_iptv_client(timeout=timeout, follow_redirects=hls["hls_follow_redirects"], headers=make_headers(hls)) as c2:
                                 async with c2.stream("GET", decoded_url) as r2:
                                     async for chunk in r2.aiter_bytes(chunk_size=hls["hls_chunk_size"]):
                                         yield chunk
@@ -749,7 +771,7 @@ async def proxy_segment(token: str, url: str, sid: str = None, catchup: str = No
     async def stream_segment():
         try:
             timeout = httpx.Timeout(hls["hls_timeout"], read=hls["hls_read_timeout"])
-            async with httpx.AsyncClient(
+            async with make_iptv_client(
                 timeout=timeout,
                 follow_redirects=hls["hls_follow_redirects"],
                 headers=make_headers(hls)
@@ -847,7 +869,7 @@ async def global_epg(force: str = None):
 
     try:
         logger.info(f"Fetching EPG from {source_url}")
-        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+        async with make_iptv_client(timeout=120, follow_redirects=True) as client:
             resp = await client.get(source_url)
             resp.raise_for_status()
             content_text = resp.text
@@ -949,7 +971,7 @@ async def global_epg_days(days: int, force: str = None):
     )
     if not cache_valid:
         try:
-            async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+            async with make_iptv_client(timeout=120, follow_redirects=True) as client:
                 resp = await client.get(source_url)
                 resp.raise_for_status()
                 raw = resp.text
@@ -1248,7 +1270,7 @@ async def import_channels(body: dict, _=Depends(check_admin)):
         raise HTTPException(status_code=400, detail="url required")
     db.set_setting("source_m3u_url", url)
     try:
-        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+        async with make_iptv_client(timeout=60, follow_redirects=True) as client:
             resp = await client.get(url)
             resp.raise_for_status()
             channels = parse_m3u(resp.text)
@@ -1263,7 +1285,7 @@ async def refresh_channels(_=Depends(check_admin)):
     if not url:
         raise HTTPException(status_code=400, detail="No source URL saved.")
     try:
-        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+        async with make_iptv_client(timeout=60, follow_redirects=True) as client:
             resp = await client.get(url)
             resp.raise_for_status()
             channels = parse_m3u(resp.text)
@@ -1291,7 +1313,7 @@ async def download_epg_xml(days: int = 0, _=Depends(check_admin)):
 
     if not cache_valid:
         try:
-            async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+            async with make_iptv_client(timeout=120, follow_redirects=True) as client:
                 resp = await client.get(source_url)
                 resp.raise_for_status()
                 raw = resp.text
@@ -1341,7 +1363,7 @@ async def scan_epg_channels(_=Depends(check_admin)):
     if not epg_sources:
         raise HTTPException(status_code=404, detail="No active EPG source")
     try:
-        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+        async with make_iptv_client(timeout=120, follow_redirects=True) as client:
             resp = await client.get(epg_sources[0])
             resp.raise_for_status()
             xml_text = resp.text
@@ -1742,6 +1764,22 @@ def vpn_is_running() -> bool:
         return False
 
 
+def vpn_get_tun_ip() -> str:
+    """Get the IP address assigned to tun0 interface."""
+    try:
+        result = subprocess.run(
+            ["ip", "addr", "show", "tun0"],
+            capture_output=True, text=True, timeout=2
+        )
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if line.startswith("inet "):
+                return line.split()[1].split("/")[0]
+    except Exception:
+        pass
+    return ""
+
+
 def vpn_start() -> dict:
     global _vpn_process, _vpn_log
 
@@ -1755,25 +1793,33 @@ def vpn_start() -> dict:
     if not ovpn_path or not os.path.exists(ovpn_path):
         return {"ok": False, "error": f"OVPN-Datei nicht gefunden: {ovpn_path}"}
 
-    # Write auth file
     os.makedirs(VPN_OVPN_DIR, exist_ok=True)
+
+    # Write auth file
     if vpn_user and vpn_pass:
         with open(VPN_AUTH_FILE, "w") as f:
             f.write(f"{vpn_user}\n{vpn_pass}\n")
         os.chmod(VPN_AUTH_FILE, 0o600)
 
+    # Write a modified ovpn that disables redirect-gateway (split-tunnel)
+    split_ovpn_path = "/data/vpn/split.ovpn"
+    with open(ovpn_path, "r") as f:
+        ovpn_content = f.read()
+    # Add route-nopull to prevent global routing takeover
+    if "route-nopull" not in ovpn_content:
+        ovpn_content += "\nroute-nopull\n"
+    with open(split_ovpn_path, "w") as f:
+        f.write(ovpn_content)
+
     cmd = [
         "openvpn",
-        "--config", ovpn_path,
-        "--daemon", "off",
-        "--writepid", "/data/vpn/openvpn.pid",
-        "--log", "/dev/stdout",
+        "--config", split_ovpn_path,
     ]
     if vpn_user and vpn_pass:
         cmd += ["--auth-user-pass", VPN_AUTH_FILE]
 
     _vpn_log = []
-    _vpn_log_add("⏳ OpenVPN wird gestartet…")
+    _vpn_log_add("⏳ OpenVPN wird gestartet (Split-Tunnel)…")
 
     try:
         _vpn_process = subprocess.Popen(
@@ -1852,7 +1898,7 @@ async def get_vpn_status(_=Depends(check_admin)):
     if running:
         for url in ["https://ifconfig.me/ip", "https://api.ipify.org", "https://checkip.amazonaws.com"]:
             try:
-                async with httpx.AsyncClient(timeout=8) as client:
+                async with make_iptv_client(timeout=8) as client:
                     r = await client.get(url)
                     if r.status_code == 200:
                         public_ip = r.text.strip()
