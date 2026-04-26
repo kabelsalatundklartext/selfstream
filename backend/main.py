@@ -667,13 +667,41 @@ async def proxy_stream(token: str, url: str, utc: str = None, lutc: str = None, 
 _sessions: dict = {}
 SESSION_MEM_TTL = 35  # seconds without segment = session dead
 
-# Segment prefetch cache: {url: bytes} – preloaded next segments
-_prefetch_cache: dict = {}
+# Shared segment cache: {url: bytes} – downloaded segments shared across users
+# Prevents downloading the same segment multiple times when users watch the same channel
+_segment_cache: dict = {}
+_segment_cache_time: dict = {}  # {url: timestamp}
+_segment_in_progress: dict = {}  # {url: asyncio.Event} – deduplication lock
+SEGMENT_CACHE_MAX = 20
+SEGMENT_CACHE_TTL = 30  # seconds
 
-async def _prefetch_segment(url: str, hls: dict):
-    """Download and cache a segment in the background for instant delivery."""
-    if url in _prefetch_cache:
-        return
+# Keep _prefetch_cache as alias for compatibility
+_prefetch_cache = _segment_cache
+
+
+async def _get_segment(url: str, hls: dict) -> bytes:
+    """Download a segment, sharing the result if another coroutine is already fetching it."""
+    now = time.time()
+
+    # Clean expired cache entries
+    expired = [u for u, t in _segment_cache_time.items() if now - t > SEGMENT_CACHE_TTL]
+    for u in expired:
+        _segment_cache.pop(u, None)
+        _segment_cache_time.pop(u, None)
+
+    # Cache hit
+    if url in _segment_cache:
+        return _segment_cache[url]
+
+    # Another coroutine is already fetching this segment – wait for it
+    if url in _segment_in_progress:
+        evt = _segment_in_progress[url]
+        await asyncio.wait_for(evt.wait(), timeout=30)
+        return _segment_cache.get(url, b"")
+
+    # We are the first – fetch it
+    evt = asyncio.Event()
+    _segment_in_progress[url] = evt
     try:
         buf = bytearray()
         async with make_iptv_client(
@@ -685,13 +713,29 @@ async def _prefetch_segment(url: str, hls: dict):
                 if resp.status_code == 200:
                     async for chunk in resp.aiter_bytes(chunk_size=131072):
                         buf.extend(chunk)
-        if len(buf) > 10_000:
-            _prefetch_cache[url] = bytes(buf)
-            while len(_prefetch_cache) > 10:
-                del _prefetch_cache[next(iter(_prefetch_cache))]
+        data = bytes(buf)
+        if len(data) > 100:
+            _segment_cache[url] = data
+            _segment_cache_time[url] = now
+            # Limit cache size
+            while len(_segment_cache) > SEGMENT_CACHE_MAX:
+                oldest = min(_segment_cache_time, key=_segment_cache_time.get)
+                _segment_cache.pop(oldest, None)
+                _segment_cache_time.pop(oldest, None)
+        return data
+    finally:
+        _segment_in_progress.pop(url, None)
+        evt.set()
+
+
+async def _prefetch_segment(url: str, hls: dict):
+    """Prefetch a segment in the background using the shared cache."""
+    if url in _segment_cache:
+        return
+    try:
+        await _get_segment(url, hls)
     except Exception:
         pass
-
 
 # Catchup session tracking (log_id → {start, last_seen, token})
 _catchup_sessions: dict = {}
@@ -867,42 +911,35 @@ async def proxy_segment(token: str, url: str, sid: str = None, catchup: str = No
                     yield rewritten.encode()
                     return
                 else:
-                    # Check prefetch cache first - instant delivery if already loaded
-                    if decoded_url in _prefetch_cache:
-                        cached = _prefetch_cache.pop(decoded_url)
-                        logger.debug(f"✅ CACHE HIT segment: {decoded_url.split('/')[-1].split('?')[0]} ({len(cached)//1024}KB)")
-                        chunk_size = 524288
-                        for i in range(0, len(cached), chunk_size):
-                            yield cached[i:i + chunk_size]
-                        return
-
-                    # Pre-buffer entire segment before sending to player.
-                    # This decouples slow IPTV provider speed from player delivery speed.
-                    # Player receives the full segment at local LAN speed (~900 Mbit/s)
-                    # instead of at the provider's speed (10-30 Mbit/s).
+                    # Check shared cache first - instant delivery if already loaded by another user
+                    # or prefetched in background
                     for attempt in range(2):
-                        buffer = bytearray()
                         t_start = time.time()
-                        try:
-                            async with client.stream("GET", decoded_url) as resp:
-                                async for chunk in resp.aiter_bytes(chunk_size=hls["hls_chunk_size"]):
-                                    buffer.extend(chunk)
-                        except Exception as e:
-                            if attempt == 0:
-                                logger.warning(f"Segment fetch error (retry): {e}")
-                                await asyncio.sleep(0.3)
-                                buffer.clear()
-                                continue
-                            raise
-
+                        data = await _get_segment(decoded_url, hls)
                         elapsed = time.time() - t_start
-                        total = len(buffer)
+                        total = len(data)
 
-                        if total < 10_000 and attempt == 0:
-                            logger.warning(f"Tiny segment ({total} bytes), retrying: {decoded_url[-50:]}")
-                            await asyncio.sleep(0.5)
-                            buffer.clear()
-                            continue
+                        # Track empty/tiny segments - these cause playback gaps
+                        if total < 1_000:
+                            seg_name = decoded_url.split("/")[-1].split("?")[0]
+                            user_name = _sessions.get(session_key, {}).get("user_name") or token[:8]
+                            channel_name = _sessions.get(session_key, {}).get("channel", "")
+                            logger.warning(f"⚠️ EMPTY SEGMENT [{user_name}] {seg_name}: {total} bytes → playback gap!")
+                            _segment_events.append({
+                                "time": time.time(), "user": user_name,
+                                "channel": channel_name,
+                                "type": "slow", "elapsed": round(elapsed, 2),
+                                "size_kb": round(total / 1024, 1), "mbps": 0.0,
+                                "seg": f"⚠️ LEER: {seg_name}"
+                            })
+                            if len(_segment_events) > 200:
+                                _segment_events.pop(0)
+                            if attempt == 0:
+                                # Remove from cache and retry
+                                _segment_cache.pop(decoded_url, None)
+                                await asyncio.sleep(0.5)
+                                continue
+                            break
 
                         # Log timing for buffering diagnosis
                         size_kb = total / 1024
@@ -939,10 +976,10 @@ async def proxy_segment(token: str, url: str, sid: str = None, catchup: str = No
                         if len(_segment_events) > 200:
                             _segment_events.pop(0)
 
-                        # Deliver fully buffered segment to player at local LAN speed
+                        # Deliver at local LAN speed
                         chunk_size = 524288  # 512 KB
-                        for i in range(0, len(buffer), chunk_size):
-                            yield bytes(buffer[i:i + chunk_size])
+                        for i in range(0, len(data), chunk_size):
+                            yield data[i:i + chunk_size]
                         break
         except asyncio.CancelledError:
             pass
