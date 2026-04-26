@@ -2505,17 +2505,18 @@ async function loadSegmentEvents() {
     </tr></thead>
     <tbody>${events.map(e => {
       const isSlow = e.type === 'slow';
-      const color = isSlow ? '#ef4444' : '#f59e0b';
-      const icon = isSlow ? '🔴' : '🟡';
+      const isEmpty = e.seg && e.seg.startsWith('⚠️ LEER');
+      const color = isEmpty ? '#ff6b6b' : isSlow ? '#ef4444' : '#f59e0b';
+      const icon = isEmpty ? '⚠️' : isSlow ? '🔴' : '🟡';
       const dt = new Date(e.time * 1000);
       const timeStr = dt.toLocaleTimeString('de-DE', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
-      return `<tr style="border-bottom:1px solid var(--border);">
+      return `<tr style="border-bottom:1px solid var(--border);${isEmpty ? 'background:rgba(255,107,107,0.05);' : ''}">
         <td style="padding:4px 8px;color:var(--text2);">${timeStr}</td>
         <td style="padding:4px 8px;"><strong>${esc(e.user)}</strong></td>
         <td style="padding:4px 8px;color:var(--teal);font-size:11px;white-space:nowrap;">${esc(e.channel||'')}</td>
-        <td style="padding:4px 8px;color:${color};font-weight:bold;">${icon} ${e.elapsed}s</td>
+        <td style="padding:4px 8px;color:${color};font-weight:bold;">${icon} ${isEmpty ? 'LEER!' : e.elapsed+'s'}</td>
         <td style="padding:4px 8px;color:var(--text2);">${e.size_kb} KB</td>
-        <td style="padding:4px 8px;color:${e.mbps < 4 ? '#ef4444' : 'var(--teal)'};">${e.mbps} Mbit/s</td>
+        <td style="padding:4px 8px;color:${e.mbps < 4 ? '#ef4444' : 'var(--teal)'};">${isEmpty ? '—' : e.mbps+' Mbit/s'}</td>
         <td style="padding:4px 8px;color:var(--text2);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(e.seg)}</td>
       </tr>`;
     }).join('')}</tbody>
