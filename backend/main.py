@@ -824,35 +824,40 @@ async def proxy_segment(token: str, url: str, sid: str = None, catchup: str = No
                     yield rewritten.encode()
                     return
                 else:
-                    # Retry once if segment is suspiciously small (< 10KB = broken segment)
+                    # Pre-buffer entire segment before sending to player.
+                    # This decouples slow IPTV provider speed from player delivery speed.
+                    # Player receives the full segment at local LAN speed (~900 Mbit/s)
+                    # instead of at the provider's speed (10-30 Mbit/s).
                     for attempt in range(2):
-                        chunks = []
-                        total = 0
+                        buffer = bytearray()
                         t_start = time.time()
                         try:
                             async with client.stream("GET", decoded_url) as resp:
                                 async for chunk in resp.aiter_bytes(chunk_size=hls["hls_chunk_size"]):
-                                    chunks.append(chunk)
-                                    total += len(chunk)
+                                    buffer.extend(chunk)
                         except Exception as e:
                             if attempt == 0:
                                 logger.warning(f"Segment fetch error (retry): {e}")
                                 await asyncio.sleep(0.3)
+                                buffer.clear()
                                 continue
                             raise
 
                         elapsed = time.time() - t_start
+                        total = len(buffer)
 
                         if total < 10_000 and attempt == 0:
                             logger.warning(f"Tiny segment ({total} bytes), retrying: {decoded_url[-50:]}")
                             await asyncio.sleep(0.5)
+                            buffer.clear()
                             continue
 
-                        # Log slow segments - these cause buffering
+                        # Log timing for buffering diagnosis
                         size_kb = total / 1024
                         speed_mbps = (total * 8) / (elapsed * 1_000_000) if elapsed > 0 else 0
                         seg_name = decoded_url.split("/")[-1].split("?")[0]
                         user_name = _sessions.get(session_key, {}).get("user_name") or token[:8]
+
                         if elapsed > 2.0:
                             logger.warning(
                                 f"⚠️ SLOW SEGMENT [{user_name}] {seg_name}: "
@@ -875,18 +880,15 @@ async def proxy_segment(token: str, url: str, sid: str = None, catchup: str = No
                                 "size_kb": round(size_kb), "mbps": round(speed_mbps, 1),
                                 "seg": seg_name
                             })
-                        else:
-                            logger.debug(
-                                f"✅ segment [{user_name}] {seg_name}: "
-                                f"{elapsed:.2f}s, {size_kb:.0f}KB, {speed_mbps:.1f}Mbit/s"
-                            )
 
-                        # Keep only last 200 events
                         if len(_segment_events) > 200:
                             _segment_events.pop(0)
 
-                        for chunk in chunks:
-                            yield chunk
+                        # Deliver fully buffered segment to player at local LAN speed
+                        # Send in large chunks (512KB) for maximum throughput
+                        chunk_size = 524288  # 512 KB
+                        for i in range(0, len(buffer), chunk_size):
+                            yield bytes(buffer[i:i + chunk_size])
                         break
         except asyncio.CancelledError:
             pass
