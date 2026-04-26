@@ -876,6 +876,7 @@ tr:hover td{background:rgba(255,255,255,.02);}
           <div class="form-hint" style="margin-bottom:10px;">
             🔴 <strong>Langsam (&gt;2s)</strong> = Buffering sehr wahrscheinlich &nbsp;|&nbsp;
             🟡 <strong>Verzögert (&gt;1s)</strong> = Buffering möglich &nbsp;|&nbsp;
+            ✅ <strong>OK (&lt;1s)</strong> = nur im Debug-Modus sichtbar &nbsp;|&nbsp;
             Normale Segmente werden nicht angezeigt
           </div>
           <div id="tr-seg-events" style="font-family:var(--mono);font-size:11px;">
@@ -2590,6 +2591,12 @@ function stopTrafficMonitor() {
 
 async function startTrafficMonitor() {
   stopTrafficMonitor();
+  // Load current debug mode state
+  const s = await api('GET', '/api/settings');
+  if (s) {
+    const cb = document.getElementById('tr-debug-mode');
+    if (cb) cb.checked = s.segment_debug === '1';
+  }
   await updateTraffic();
   await loadSegmentEvents();
   const secs = parseInt(document.getElementById('traffic-interval')?.value || '5');
