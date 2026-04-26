@@ -2262,7 +2262,7 @@ async function runSpeedtest() {
     if (iptv && iptv.ok) {
       document.getElementById('st-iptv-mbps').textContent = iptv.mbps;
       document.getElementById('st-iptv-detail').textContent =
-        `${iptv.mb} MB in ${iptv.seconds}s • ${iptv.server || ''}`;
+        `${iptv.mb} MB in ${iptv.seconds}s • ${iptv.server || ''} • ${iptv.parallel ? iptv.parallel + ' Streams parallel' : ''}`;
       document.getElementById('st-iptv-hd').textContent  = (iptv.streams?.hd_720p  || 0) + 'x';
       document.getElementById('st-iptv-fhd').textContent = (iptv.streams?.fhd_1080p|| 0) + 'x';
       document.getElementById('st-iptv-4k').textContent  = (iptv.streams?.uhd_4k   || 0) + 'x';
