@@ -228,43 +228,44 @@ _socks_process: Optional[subprocess.Popen] = None
 
 
 def make_iptv_client(**kwargs) -> httpx.AsyncClient:
-    """Create an httpx client that routes through SOCKS5 proxy if VPN is active (split-tunnel)."""
-    if vpn_is_running() and _socks_process is not None and _socks_process.poll() is None:
-        kwargs["proxy"] = f"socks5://127.0.0.1:{SOCKS_PORT}"
+    """Create an httpx client - uses direct connection (VPN tunnel handles routing)."""
     return httpx.AsyncClient(**kwargs)
 
 
 def _start_socks_proxy(tun_ip: str):
-    """Start microsocks SOCKS5 proxy bound to tun0 IP."""
-    global _socks_process
-    if _socks_process is not None and _socks_process.poll() is None:
-        return
-    try:
-        _socks_process = subprocess.Popen(
-            ["microsocks", "-i", "127.0.0.1", "-p", str(SOCKS_PORT), "-b", tun_ip],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        logger.info(f"microsocks SOCKS5 proxy started on 127.0.0.1:{SOCKS_PORT} via {tun_ip}")
-        _vpn_log_add(f"✅ SOCKS5 Proxy gestartet auf 127.0.0.1:{SOCKS_PORT} via {tun_ip}")
-    except Exception as e:
-        logger.error(f"microsocks start failed: {e}")
-        _vpn_log_add(f"⚠️ SOCKS5 Proxy Fehler: {e}")
+    pass  # Reserved for future use
 
 
 def _vpn_wait_for_tun(timeout: int = 30):
-    """Wait for tun0 to be ready, then start SOCKS proxy."""
+    """Wait for tun0 to be ready, then fix local routing."""
     import time
     start = time.time()
     while time.time() - start < timeout:
         tun_ip = vpn_get_tun_ip()
         if tun_ip:
-            _vpn_log_add(f"🌐 tun0 bereit: {tun_ip}")
-            time.sleep(1)  # short wait for routing to settle
-            _start_socks_proxy(tun_ip)
+            _vpn_log_add(f"🌐 tun0 bereit: {tun_ip} – VPN aktiv!")
+            # Keep local network (192.168.x.x) routed via eth0, not VPN
+            try:
+                result = subprocess.run(
+                    ["ip", "route", "show", "default"],
+                    capture_output=True, text=True, timeout=2
+                )
+                # Find original gateway from eth0
+                for line in result.stdout.splitlines():
+                    if "eth0" in line and "via" in line:
+                        gw = line.split("via")[1].strip().split()[0]
+                        # Add route for local subnet via eth0
+                        subprocess.run(
+                            ["ip", "route", "add", "192.168.0.0/16", "via", gw, "dev", "eth0"],
+                            capture_output=True, timeout=2
+                        )
+                        _vpn_log_add(f"🏠 Lokales Netz via eth0 ({gw}) – Admin-Panel bleibt schnell")
+                        break
+            except Exception as e:
+                _vpn_log_add(f"⚠️ Route fix: {e}")
             return
         time.sleep(0.5)
-    _vpn_log_add("⚠️ tun0 Timeout – SOCKS5 Proxy nicht gestartet")
+    _vpn_log_add("⚠️ tun0 Timeout")
 
 
 def get_hls_settings() -> dict:
@@ -1835,13 +1836,12 @@ def vpn_start() -> dict:
             f.write(f"{vpn_user}\n{vpn_pass}\n")
         os.chmod(VPN_AUTH_FILE, 0o600)
 
-    # Write a modified ovpn that disables redirect-gateway (split-tunnel)
+    # Write a modified ovpn with auth-nocache
     split_ovpn_path = "/data/vpn/split.ovpn"
     with open(ovpn_path, "r") as f:
         ovpn_content = f.read()
-    # Add route-nopull to prevent global routing takeover
-    if "route-nopull" not in ovpn_content:
-        ovpn_content += "\nroute-nopull\n"
+    if "auth-nocache" not in ovpn_content:
+        ovpn_content += "\nauth-nocache\n"
     with open(split_ovpn_path, "w") as f:
         f.write(ovpn_content)
 
