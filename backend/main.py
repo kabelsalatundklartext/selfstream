@@ -632,6 +632,23 @@ async def proxy_stream(token: str, url: str, utc: str = None, lutc: str = None, 
         sid = hashlib.md5(f"{token}::{_ip2}::{_ua2}".encode()).hexdigest()[:16]
         rewritten = rewrite_hls_playlist(playlist_content, decoded_url, proxy_url, token, sid=sid)
         logger.info(f"HLS playlist served: {user['name']} → {channel_name}")
+
+        # Prefetch next 2 segments in background for smoother playback
+        try:
+            base_url = "/".join(decoded_url.split("/")[:-1])
+            seg_urls = []
+            for line in playlist_content.splitlines():
+                line = line.strip()
+                if line and not line.startswith("#") and (".ts" in line or ".aac" in line):
+                    full_url = line if line.startswith("http") else f"{base_url}/{line}"
+                    if full_url not in _prefetch_cache:
+                        seg_urls.append(full_url)
+                    if len(seg_urls) >= 2:
+                        break
+            for seg_url in seg_urls:
+                asyncio.create_task(_prefetch_segment(seg_url, hls))
+        except Exception:
+            pass
         return HTMLResponse(
             content=rewritten,
             media_type="application/vnd.apple.mpegurl",
@@ -649,6 +666,32 @@ async def proxy_stream(token: str, url: str, utc: str = None, lutc: str = None, 
 # {session_key: {"channel": str, "log_id": int, "start": float, "last_seen": float, "user_id": int, "token": str}}
 _sessions: dict = {}
 SESSION_MEM_TTL = 35  # seconds without segment = session dead
+
+# Segment prefetch cache: {url: bytes} – preloaded next segments
+_prefetch_cache: dict = {}
+
+async def _prefetch_segment(url: str, hls: dict):
+    """Download and cache a segment in the background for instant delivery."""
+    if url in _prefetch_cache:
+        return
+    try:
+        buf = bytearray()
+        async with make_iptv_client(
+            timeout=httpx.Timeout(hls["hls_timeout"], read=hls["hls_read_timeout"]),
+            follow_redirects=hls["hls_follow_redirects"],
+            headers=make_headers(hls)
+        ) as client:
+            async with client.stream("GET", url) as resp:
+                if resp.status_code == 200:
+                    async for chunk in resp.aiter_bytes(chunk_size=131072):
+                        buf.extend(chunk)
+        if len(buf) > 10_000:
+            _prefetch_cache[url] = bytes(buf)
+            while len(_prefetch_cache) > 10:
+                del _prefetch_cache[next(iter(_prefetch_cache))]
+    except Exception:
+        pass
+
 
 # Catchup session tracking (log_id → {start, last_seen, token})
 _catchup_sessions: dict = {}
@@ -824,6 +867,15 @@ async def proxy_segment(token: str, url: str, sid: str = None, catchup: str = No
                     yield rewritten.encode()
                     return
                 else:
+                    # Check prefetch cache first - instant delivery if already loaded
+                    if decoded_url in _prefetch_cache:
+                        cached = _prefetch_cache.pop(decoded_url)
+                        logger.debug(f"✅ CACHE HIT segment: {decoded_url.split('/')[-1].split('?')[0]} ({len(cached)//1024}KB)")
+                        chunk_size = 524288
+                        for i in range(0, len(cached), chunk_size):
+                            yield cached[i:i + chunk_size]
+                        return
+
                     # Pre-buffer entire segment before sending to player.
                     # This decouples slow IPTV provider speed from player delivery speed.
                     # Player receives the full segment at local LAN speed (~900 Mbit/s)
@@ -885,7 +937,6 @@ async def proxy_segment(token: str, url: str, sid: str = None, catchup: str = No
                             _segment_events.pop(0)
 
                         # Deliver fully buffered segment to player at local LAN speed
-                        # Send in large chunks (512KB) for maximum throughput
                         chunk_size = 524288  # 512 KB
                         for i in range(0, len(buffer), chunk_size):
                             yield bytes(buffer[i:i + chunk_size])
