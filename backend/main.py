@@ -7,6 +7,7 @@ import sqlite3
 import httpx
 import asyncio
 import logging
+import threading
 import urllib.parse
 import re
 import xml.etree.ElementTree as ET
@@ -128,6 +129,13 @@ async def startup():
     _generate_error_video()
     asyncio.create_task(_epg_watchdog())
     asyncio.create_task(_m3u_watchdog())
+    # Auto-start VPN if it was enabled before
+    if db.get_setting("vpn_enabled", "0") == "1":
+        result = vpn_start()
+        if result.get("ok"):
+            logger.info("VPN auto-start: OK")
+        else:
+            logger.warning(f"VPN auto-start failed: {result.get('error')}")
     logger.info("selfstream started")
 
 
@@ -1686,27 +1694,129 @@ async def delete_logo(body: dict, _=Depends(check_admin)):
     return {"ok": True}
 
 
-# ── VPN (gluetun) Integration ─────────────────────────────────────────────────
+# ── VPN (OpenVPN) Integration ──────────────────────────────────────────────────
+
+import subprocess
+import shutil
 
 VPN_SETTINGS_KEYS = {
-    "vpn_enabled", "vpn_provider", "vpn_type", "vpn_user", "vpn_password",
-    "vpn_country", "vpn_custom_config", "vpn_protocol", "vpn_gluetun_host"
+    "vpn_enabled", "vpn_user", "vpn_password", "vpn_ovpn_path"
 }
+
+_vpn_process: Optional[subprocess.Popen] = None
+_vpn_log: list = []
+VPN_OVPN_DIR = "/data/vpn"
+VPN_AUTH_FILE = "/data/vpn/auth.txt"
+VPN_LOG_MAX = 200
+
+
+def _vpn_log_add(line: str):
+    _vpn_log.append(line)
+    if len(_vpn_log) > VPN_LOG_MAX:
+        _vpn_log.pop(0)
+
+
+def _vpn_reader(proc: subprocess.Popen):
+    """Read OpenVPN stdout/stderr in background thread."""
+    try:
+        for line in proc.stdout:
+            line = line.strip()
+            if line:
+                _vpn_log_add(line)
+                logger.info(f"[openvpn] {line}")
+    except Exception:
+        pass
+
+
+def vpn_is_running() -> bool:
+    global _vpn_process
+    return _vpn_process is not None and _vpn_process.poll() is None
+
+
+def vpn_start() -> dict:
+    global _vpn_process, _vpn_log
+
+    if vpn_is_running():
+        return {"ok": False, "error": "VPN läuft bereits"}
+
+    ovpn_path = db.get_setting("vpn_ovpn_path", "")
+    vpn_user  = db.get_setting("vpn_user", "")
+    vpn_pass  = db.get_setting("vpn_password", "")
+
+    if not ovpn_path or not os.path.exists(ovpn_path):
+        return {"ok": False, "error": f"OVPN-Datei nicht gefunden: {ovpn_path}"}
+
+    # Write auth file
+    os.makedirs(VPN_OVPN_DIR, exist_ok=True)
+    if vpn_user and vpn_pass:
+        with open(VPN_AUTH_FILE, "w") as f:
+            f.write(f"{vpn_user}\n{vpn_pass}\n")
+        os.chmod(VPN_AUTH_FILE, 0o600)
+
+    cmd = [
+        "openvpn",
+        "--config", ovpn_path,
+        "--daemon", "off",
+        "--writepid", "/data/vpn/openvpn.pid",
+        "--log", "/dev/stdout",
+    ]
+    if vpn_user and vpn_pass:
+        cmd += ["--auth-user-pass", VPN_AUTH_FILE]
+
+    _vpn_log = []
+    _vpn_log_add("⏳ OpenVPN wird gestartet…")
+
+    try:
+        _vpn_process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        t = threading.Thread(target=_vpn_reader, args=(_vpn_process,), daemon=True)
+        t.start()
+        db.set_setting("vpn_enabled", "1")
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def vpn_stop() -> dict:
+    global _vpn_process
+    if not vpn_is_running():
+        db.set_setting("vpn_enabled", "0")
+        return {"ok": True, "msg": "VPN war nicht aktiv"}
+    try:
+        _vpn_process.terminate()
+        _vpn_process.wait(timeout=10)
+    except Exception:
+        try:
+            _vpn_process.kill()
+        except Exception:
+            pass
+    _vpn_process = None
+    _vpn_log_add("🔴 OpenVPN gestoppt.")
+    db.set_setting("vpn_enabled", "0")
+    return {"ok": True}
+
 
 @admin_app.get("/api/vpn")
 def get_vpn_settings(_=Depends(check_admin)):
     s = db.get_all_settings()
+    # List uploaded .ovpn files
+    ovpn_files = []
+    if os.path.exists(VPN_OVPN_DIR):
+        ovpn_files = [f for f in os.listdir(VPN_OVPN_DIR) if f.endswith(".ovpn")]
     return {
-        "vpn_enabled":       s.get("vpn_enabled", "0"),
-        "vpn_provider":      s.get("vpn_provider", "expressvpn"),
-        "vpn_type":          s.get("vpn_type", "openvpn"),
-        "vpn_user":          s.get("vpn_user", ""),
-        "vpn_password":      s.get("vpn_password", ""),
-        "vpn_country":       s.get("vpn_country", ""),
-        "vpn_protocol":      s.get("vpn_protocol", "udp"),
-        "vpn_custom_config": s.get("vpn_custom_config", ""),
-        "vpn_gluetun_host":  s.get("vpn_gluetun_host", ""),
+        "vpn_enabled":  s.get("vpn_enabled", "0"),
+        "vpn_user":     s.get("vpn_user", ""),
+        "vpn_password": s.get("vpn_password", ""),
+        "vpn_ovpn_path": s.get("vpn_ovpn_path", ""),
+        "vpn_running":  vpn_is_running(),
+        "ovpn_files":   ovpn_files,
     }
+
 
 @admin_app.post("/api/vpn")
 def update_vpn_settings(body: dict, _=Depends(check_admin)):
@@ -1715,34 +1825,60 @@ def update_vpn_settings(body: dict, _=Depends(check_admin)):
             db.set_setting(key, str(val))
     return {"ok": True}
 
+
+@admin_app.post("/api/vpn/start")
+def vpn_start_endpoint(_=Depends(check_admin)):
+    return vpn_start()
+
+
+@admin_app.post("/api/vpn/stop")
+def vpn_stop_endpoint(_=Depends(check_admin)):
+    return vpn_stop()
+
+
 @admin_app.get("/api/vpn/status")
 async def get_vpn_status(_=Depends(check_admin)):
-    """Check gluetun status and public IP via its control API."""
-    gluetun_host = db.get_setting("vpn_gluetun_host", "")
-    if not gluetun_host:
-        return {"connected": False, "error": "Kein gluetun Host konfiguriert"}
-    gluetun_host = gluetun_host.rstrip("/")
-    try:
-        async with httpx.AsyncClient(timeout=5) as client:
-            # Check VPN state
-            r = await client.get(f"{gluetun_host}/v1/openvpn/status")
-            state_data = r.json() if r.status_code == 200 else {}
-            status = state_data.get("status", "unknown")
+    running = vpn_is_running()
+    public_ip = ""
+    if running:
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                r = await client.get("https://ifconfig.me/ip")
+                if r.status_code == 200:
+                    public_ip = r.text.strip()
+        except Exception:
+            pass
+    return {
+        "running": running,
+        "public_ip": public_ip,
+        "log": _vpn_log[-50:],
+    }
 
-            # Get public IP
-            ip_data = {}
-            try:
-                r2 = await client.get(f"{gluetun_host}/v1/publicip/ip")
-                ip_data = r2.json() if r2.status_code == 200 else {}
-            except Exception:
-                pass
 
-            return {
-                "connected": status == "running",
-                "status": status,
-                "public_ip": ip_data.get("public_ip", ""),
-                "country": ip_data.get("country", ""),
-                "city": ip_data.get("city", ""),
-            }
-    except Exception as e:
-        return {"connected": False, "error": str(e)}
+@admin_app.post("/api/vpn/upload")
+async def vpn_upload_ovpn(request: Request, _=Depends(check_admin)):
+    os.makedirs(VPN_OVPN_DIR, exist_ok=True)
+    form = await request.form()
+    file = form.get("file")
+    if not file:
+        raise HTTPException(status_code=400, detail="Keine Datei")
+    filename = os.path.basename(file.filename)
+    if not filename.endswith(".ovpn"):
+        raise HTTPException(status_code=400, detail="Nur .ovpn Dateien erlaubt")
+    dest = os.path.join(VPN_OVPN_DIR, filename)
+    content = await file.read()
+    with open(dest, "wb") as f:
+        f.write(content)
+    db.set_setting("vpn_ovpn_path", dest)
+    return {"ok": True, "filename": filename, "path": dest}
+
+
+@admin_app.delete("/api/vpn/ovpn/{filename}")
+def vpn_delete_ovpn(filename: str, _=Depends(check_admin)):
+    path = os.path.join(VPN_OVPN_DIR, os.path.basename(filename))
+    if os.path.exists(path):
+        os.remove(path)
+    current = db.get_setting("vpn_ovpn_path", "")
+    if current == path:
+        db.set_setting("vpn_ovpn_path", "")
+    return {"ok": True}
