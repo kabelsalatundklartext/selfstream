@@ -645,88 +645,62 @@ tr:hover td{background:rgba(255,255,255,.02);}
 
       <!-- VPN Page -->
       <div id="page-vpn" class="content-area" style="display:none">
-        <div class="section-title" style="margin-bottom:16px;">🔒 VPN – gluetun Integration</div>
+        <div class="section-title" style="margin-bottom:16px;">🔒 VPN – OpenVPN Integration</div>
         <div class="settings-grid">
 
           <div class="scard">
             <div class="scard-title">📡 VPN Status</div>
-            <div id="vpn-status-box" style="padding:12px;border-radius:6px;background:var(--bg2);border:1px solid var(--border);margin-bottom:12px;">
+            <div id="vpn-status-box" style="padding:12px;border-radius:6px;background:var(--bg2);border:1px solid var(--border);margin-bottom:14px;">
               <div style="display:flex;align-items:center;gap:10px;">
                 <span id="vpn-status-dot" style="width:12px;height:12px;border-radius:50%;background:#888;display:inline-block;flex-shrink:0;"></span>
-                <span id="vpn-status-text" style="font-family:var(--mono);font-size:12px;">Nicht verbunden</span>
+                <span id="vpn-status-text" style="font-family:var(--mono);font-size:12px;">Unbekannt</span>
               </div>
-              <div id="vpn-status-detail" style="font-size:11px;color:var(--text2);margin-top:6px;"></div>
+              <div id="vpn-status-ip" style="font-size:11px;color:var(--teal);margin-top:6px;font-family:var(--mono);"></div>
             </div>
-            <div class="form-group">
-              <label class="form-label">gluetun Control API URL</label>
-              <input class="form-input" id="vpn-host" placeholder="http://192.168.1.10:8000">
-              <div class="form-hint">URL zum gluetun HTTP Control Server (Standard-Port: 8000)</div>
+            <div style="display:flex;gap:8px;margin-bottom:14px;">
+              <button class="btn primary" id="vpn-btn-start" onclick="vpnStart()">▶ VPN Starten</button>
+              <button class="btn" id="vpn-btn-stop" onclick="vpnStop()">⏹ Stoppen</button>
+              <button class="btn" onclick="vpnRefreshStatus()">🔄</button>
             </div>
-            <div style="display:flex;gap:8px;">
-              <button class="btn primary" onclick="saveVpnHost()">Speichern</button>
-              <button class="btn" onclick="checkVpnStatus()">🔄 Status prüfen</button>
-            </div>
+            <div class="scard-title" style="margin-bottom:8px;">📋 Live Log</div>
+            <div id="vpn-log" style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;font-family:var(--mono);font-size:10px;line-height:1.6;height:220px;overflow-y:auto;color:var(--text2);white-space:pre-wrap;">– Log erscheint hier –</div>
           </div>
 
           <div class="scard">
-            <div class="scard-title">⚙️ gluetun Konfiguration</div>
-            <div class="form-hint" style="margin-bottom:12px;">
-              Diese Werte dienen als Referenz / Dokumentation für deine gluetun Docker-Konfiguration. selfstream selbst startet keinen VPN-Prozess – gluetun läuft als separater Container.
-            </div>
-            <div class="form-group">
-              <label class="form-label">VPN Provider</label>
-              <select class="form-select" id="vpn-provider" onchange="onVpnProviderChange()">
-                <option value="expressvpn">ExpressVPN</option>
-                <option value="nordvpn">NordVPN</option>
-                <option value="mullvad">Mullvad</option>
-                <option value="protonvpn">ProtonVPN</option>
-                <option value="surfshark">Surfshark</option>
-                <option value="cyberghost">CyberGhost</option>
-                <option value="custom">Custom (.ovpn Datei)</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label class="form-label">VPN Typ</label>
-              <select class="form-select" id="vpn-type">
-                <option value="openvpn">OpenVPN</option>
-                <option value="wireguard">WireGuard</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label class="form-label">Protokoll</label>
-              <select class="form-select" id="vpn-protocol">
-                <option value="udp">UDP</option>
-                <option value="tcp">TCP</option>
-              </select>
-            </div>
-            <div class="form-group" id="vpn-user-group">
-              <label class="form-label">Benutzername</label>
-              <input class="form-input" id="vpn-user" placeholder="OpenVPN Benutzername">
-            </div>
-            <div class="form-group" id="vpn-pass-group">
-              <label class="form-label">Passwort</label>
-              <input class="form-input" type="password" id="vpn-password" placeholder="OpenVPN Passwort">
-            </div>
-            <div class="form-group">
-              <label class="form-label">Land (optional)</label>
-              <input class="form-input" id="vpn-country" placeholder="z.B. Switzerland, Germany">
-              <div class="form-hint">Leer lassen = automatisch. Exakten Ländernamen verwenden.</div>
-            </div>
-            <div class="form-group" id="vpn-custom-group" style="display:none">
-              <label class="form-label">Custom Config Pfad (.ovpn)</label>
-              <input class="form-input" id="vpn-custom-config" placeholder="/gluetun/my_vpn.ovpn">
-              <div class="form-hint">Pfad zur .ovpn Datei im gluetun Container</div>
-            </div>
-            <button class="btn primary" onclick="saveVpnConfig()">💾 Konfiguration speichern</button>
-          </div>
+            <div class="scard-title">⚙️ Konfiguration</div>
 
-          <div class="scard" style="grid-column:1/-1">
-            <div class="scard-title">📋 gluetun Docker Environment Variables</div>
-            <div class="form-hint" style="margin-bottom:12px;">Kopiere diese Werte in deine gluetun Docker-Konfiguration (Unraid → Container bearbeiten):</div>
-            <div id="vpn-env-output" style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:12px;font-family:var(--mono);font-size:11px;line-height:1.8;white-space:pre-wrap;color:var(--teal);">
-              – Konfiguration speichern um Variablen zu sehen –
+            <div class="form-group">
+              <label class="form-label">OpenVPN Benutzername</label>
+              <input class="form-input" id="vpn-user" placeholder="Benutzername vom VPN-Anbieter">
+              <div class="form-hint">Bei ExpressVPN: Manuelle Konfiguration → OpenVPN</div>
             </div>
-            <button class="btn sm" style="margin-top:8px;" onclick="copyEnvVars()">📋 Kopieren</button>
+            <div class="form-group">
+              <label class="form-label">OpenVPN Passwort</label>
+              <input class="form-input" type="password" id="vpn-password" placeholder="Passwort vom VPN-Anbieter">
+            </div>
+            <button class="btn primary" style="margin-bottom:16px;" onclick="vpnSaveCredentials()">💾 Zugangsdaten speichern</button>
+
+            <div class="form-group" style="border-top:1px solid var(--border);padding-top:14px;margin-top:4px;">
+              <label class="form-label">.ovpn Datei hochladen</label>
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <input type="file" id="vpn-file" accept=".ovpn" style="display:none" onchange="vpnUpload(this)">
+                <button class="btn sm" onclick="document.getElementById('vpn-file').click()">📁 Datei wählen</button>
+                <span id="vpn-file-name" style="font-family:var(--mono);font-size:11px;color:var(--text2);">Keine Datei gewählt</span>
+              </div>
+              <div class="form-hint">Lade deine .ovpn Datei vom VPN-Anbieter hoch (z.B. expressvpn_switzerland.ovpn)</div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Aktive .ovpn Datei</label>
+              <div id="vpn-ovpn-list" style="font-family:var(--mono);font-size:11px;color:var(--teal);padding:6px 0;">Lädt…</div>
+            </div>
+
+            <div class="form-hint" style="margin-top:8px;padding:10px;background:var(--bg2);border-radius:6px;border:1px solid var(--border);">
+              ⚠️ selfstream Container braucht:<br>
+              <code style="color:var(--teal);">--cap-add=NET_ADMIN</code><br>
+              <code style="color:var(--teal);">--device=/dev/net/tun</code><br>
+              In Unraid: Container bearbeiten → Privilegierte Rechte = AN
+            </div>
           </div>
 
         </div>
@@ -2092,99 +2066,124 @@ async function epgDDrop(e, tgtId) {
 
 // ── VPN ───────────────────────────────────────────────────────────────────────
 
+let _vpnStatusInterval = null;
+
 async function loadVpnSettings() {
   const s = await api('GET', '/api/vpn');
   if (!s) return;
-  document.getElementById('vpn-host').value        = s.vpn_gluetun_host || '';
-  document.getElementById('vpn-provider').value    = s.vpn_provider || 'expressvpn';
-  document.getElementById('vpn-type').value        = s.vpn_type || 'openvpn';
-  document.getElementById('vpn-protocol').value    = s.vpn_protocol || 'udp';
-  document.getElementById('vpn-user').value        = s.vpn_user || '';
-  document.getElementById('vpn-password').value    = s.vpn_password || '';
-  document.getElementById('vpn-country').value     = s.vpn_country || '';
-  document.getElementById('vpn-custom-config').value = s.vpn_custom_config || '';
-  onVpnProviderChange();
-  renderVpnEnvVars(s);
-  checkVpnStatus();
+  document.getElementById('vpn-user').value     = s.vpn_user || '';
+  document.getElementById('vpn-password').value = s.vpn_password || '';
+  renderOvpnList(s.ovpn_files || [], s.vpn_ovpn_path || '');
+  vpnRefreshStatus();
+  // Auto-poll log every 3s when on VPN page
+  if (_vpnStatusInterval) clearInterval(_vpnStatusInterval);
+  _vpnStatusInterval = setInterval(vpnRefreshStatus, 3000);
 }
 
-function onVpnProviderChange() {
-  const provider = document.getElementById('vpn-provider').value;
-  const isCustom = provider === 'custom';
-  document.getElementById('vpn-custom-group').style.display = isCustom ? '' : 'none';
-  document.getElementById('vpn-user-group').style.display   = isCustom ? 'none' : '';
-  document.getElementById('vpn-pass-group').style.display   = isCustom ? 'none' : '';
+function renderOvpnList(files, activePath) {
+  const el = document.getElementById('vpn-ovpn-list');
+  if (!files.length) { el.textContent = 'Keine .ovpn Datei hochgeladen'; return; }
+  el.innerHTML = files.map(f => {
+    const fullPath = `/data/vpn/${f}`;
+    const isActive = activePath === fullPath;
+    return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+      <span style="color:${isActive ? 'var(--teal)' : 'var(--text2)'};">${isActive ? '✅' : '○'} ${f}</span>
+      ${!isActive ? `<button class="btn sm" onclick="vpnSetActive('${f}')">Aktivieren</button>` : ''}
+      <button class="btn sm" style="color:#ef4444;" onclick="vpnDeleteOvpn('${f}')">🗑</button>
+    </div>`;
+  }).join('');
 }
 
-async function saveVpnHost() {
-  const host = document.getElementById('vpn-host').value.trim();
-  await api('POST', '/api/vpn', { vpn_gluetun_host: host });
-  showToast('gluetun Host gespeichert!');
-  checkVpnStatus();
+async function vpnSaveCredentials() {
+  await api('POST', '/api/vpn', {
+    vpn_user:     document.getElementById('vpn-user').value.trim(),
+    vpn_password: document.getElementById('vpn-password').value.trim(),
+  });
+  showToast('Zugangsdaten gespeichert!');
 }
 
-async function saveVpnConfig() {
-  const data = {
-    vpn_provider:      document.getElementById('vpn-provider').value,
-    vpn_type:          document.getElementById('vpn-type').value,
-    vpn_protocol:      document.getElementById('vpn-protocol').value,
-    vpn_user:          document.getElementById('vpn-user').value.trim(),
-    vpn_password:      document.getElementById('vpn-password').value.trim(),
-    vpn_country:       document.getElementById('vpn-country').value.trim(),
-    vpn_custom_config: document.getElementById('vpn-custom-config').value.trim(),
-    vpn_gluetun_host:  document.getElementById('vpn-host').value.trim(),
-  };
-  await api('POST', '/api/vpn', data);
-  showToast('VPN Konfiguration gespeichert!');
-  renderVpnEnvVars(data);
+async function vpnUpload(input) {
+  const file = input.files[0];
+  if (!file) return;
+  document.getElementById('vpn-file-name').textContent = file.name;
+  const fd = new FormData();
+  fd.append('file', file);
+  const resp = await fetch('/api/vpn/upload', {
+    method: 'POST',
+    headers: { 'X-Admin-Token': localStorage.getItem('adminToken') || '' },
+    body: fd,
+  });
+  const data = await resp.json();
+  if (data.ok) {
+    showToast(`✅ ${data.filename} hochgeladen und aktiviert!`);
+    loadVpnSettings();
+  } else {
+    showToast('Fehler beim Upload');
+  }
 }
 
-async function checkVpnStatus() {
+async function vpnSetActive(filename) {
+  await api('POST', '/api/vpn', { vpn_ovpn_path: `/data/vpn/${filename}` });
+  showToast(`${filename} aktiviert`);
+  loadVpnSettings();
+}
+
+async function vpnDeleteOvpn(filename) {
+  if (!confirm(`${filename} löschen?`)) return;
+  await api('DELETE', `/api/vpn/ovpn/${filename}`);
+  showToast('Datei gelöscht');
+  loadVpnSettings();
+}
+
+async function vpnStart() {
+  document.getElementById('vpn-btn-start').disabled = true;
+  const r = await api('POST', '/api/vpn/start');
+  document.getElementById('vpn-btn-start').disabled = false;
+  if (r && r.ok) {
+    showToast('▶ VPN wird gestartet…');
+  } else {
+    showToast('❌ ' + (r?.error || 'Fehler'));
+  }
+  vpnRefreshStatus();
+}
+
+async function vpnStop() {
+  await api('POST', '/api/vpn/stop');
+  showToast('⏹ VPN gestoppt');
+  vpnRefreshStatus();
+}
+
+async function vpnRefreshStatus() {
+  const s = await api('GET', '/api/vpn/status');
+  if (!s) return;
   const dot  = document.getElementById('vpn-status-dot');
   const text = document.getElementById('vpn-status-text');
-  const detail = document.getElementById('vpn-status-detail');
-  dot.style.background = '#f59e0b';
-  text.textContent = 'Prüfe Verbindung…';
-  detail.textContent = '';
-  try {
-    const s = await api('GET', '/api/vpn/status');
-    if (s.connected) {
-      dot.style.background = '#00e5c8';
-      text.textContent = '✅ Verbunden';
-      detail.textContent = `IP: ${s.public_ip || '–'}  •  ${s.city || ''}${s.city && s.country ? ', ' : ''}${s.country || ''}`;
-    } else {
-      dot.style.background = '#ef4444';
-      text.textContent = '❌ Nicht verbunden';
-      detail.textContent = s.error || s.status || '';
-    }
-  } catch(e) {
-    dot.style.background = '#888';
-    text.textContent = 'Status unbekannt';
-    detail.textContent = 'gluetun Host nicht erreichbar';
-  }
-}
-
-function renderVpnEnvVars(s) {
-  const provider = s.vpn_provider || 'expressvpn';
-  const isCustom = provider === 'custom';
-  let lines = [];
-  lines.push(`VPN_SERVICE_PROVIDER=${isCustom ? 'custom' : provider}`);
-  lines.push(`VPN_TYPE=${s.vpn_type || 'openvpn'}`);
-  if (!isCustom) {
-    if (s.vpn_user)     lines.push(`OPENVPN_USER=${s.vpn_user}`);
-    if (s.vpn_password) lines.push(`OPENVPN_PASSWORD=${s.vpn_password}`);
-    if ((s.vpn_protocol||'udp') === 'tcp') lines.push(`OPENVPN_PROTOCOL=tcp`);
-    if (s.vpn_country)  lines.push(`SERVER_COUNTRIES=${s.vpn_country}`);
+  const ipEl = document.getElementById('vpn-status-ip');
+  if (s.running) {
+    dot.style.background  = '#00e5c8';
+    text.textContent      = '✅ Verbunden';
+    ipEl.textContent      = s.public_ip ? `Öffentliche IP: ${s.public_ip}` : '';
   } else {
-    if (s.vpn_custom_config) lines.push(`OPENVPN_CUSTOM_CONFIG=${s.vpn_custom_config}`);
+    dot.style.background  = '#ef4444';
+    text.textContent      = '🔴 Nicht verbunden';
+    ipEl.textContent      = '';
   }
-  lines.push(`UPDATER_PERIOD=24h`);
-  document.getElementById('vpn-env-output').textContent = lines.join('\n');
+  // Update log
+  const logEl = document.getElementById('vpn-log');
+  if (s.log && s.log.length) {
+    logEl.textContent = s.log.join('\n');
+    logEl.scrollTop   = logEl.scrollHeight;
+  }
 }
 
-function copyEnvVars() {
-  const text = document.getElementById('vpn-env-output').textContent;
-  navigator.clipboard.writeText(text).then(() => showToast('Kopiert!'));
+// Stop polling when leaving VPN page
+const _origNav = nav;
+function nav(page, el) {
+  if (page !== 'vpn' && _vpnStatusInterval) {
+    clearInterval(_vpnStatusInterval);
+    _vpnStatusInterval = null;
+  }
+  _origNav(page, el);
 }
 
 </script>
