@@ -254,6 +254,7 @@ tr:hover td{background:rgba(255,255,255,.02);}
       <div class="nav-item" onclick="nav('epg',this)"><span class="nav-icon">📅</span>EPG</div>
       <div class="nav-section">System</div>
       <div class="nav-item" onclick="nav('logs',this)"><span class="nav-icon">📋</span>Verlauf</div>
+      <div class="nav-item" onclick="nav('traffic',this)"><span class="nav-icon">📊</span>Traffic</div>
       <div class="nav-item" onclick="nav('vpn',this)"><span class="nav-icon">🔒</span>VPN</div>
       <div class="nav-item" onclick="nav('settings',this)"><span class="nav-icon">⚙️</span>Einstellungen</div>
     </div>
@@ -773,6 +774,60 @@ tr:hover td{background:rgba(255,255,255,.02);}
         </div>
       </div>
 
+      <!-- Traffic Page -->
+      <div id="page-traffic" class="content-area" style="display:none">
+        <div class="section-hdr">
+          <span class="section-title">📊 Traffic-Analyse</span>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <select id="traffic-interval" class="group-filter" style="font-size:11px;padding:5px 8px;" onchange="startTrafficMonitor()">
+              <option value="3">Alle 3s</option>
+              <option value="5" selected>Alle 5s</option>
+              <option value="10">Alle 10s</option>
+              <option value="30">Alle 30s</option>
+            </select>
+            <button class="refresh-btn" onclick="startTrafficMonitor()">↻ Refresh</button>
+          </div>
+        </div>
+
+        <!-- Live Stats Row -->
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px;">
+          <div class="scard" style="text-align:center;padding:16px;">
+            <div id="tr-streams" style="font-size:36px;font-family:var(--mono);color:var(--teal);">0</div>
+            <div style="font-size:10px;color:var(--text2);margin-top:4px;letter-spacing:.1em;">AKTIVE STREAMS</div>
+          </div>
+          <div class="scard" style="text-align:center;padding:16px;">
+            <div id="tr-mbps" style="font-size:36px;font-family:var(--mono);color:var(--teal);">0</div>
+            <div style="font-size:10px;color:var(--text2);margin-top:4px;letter-spacing:.1em;">MBIT/S GESAMT</div>
+          </div>
+          <div class="scard" style="text-align:center;padding:16px;">
+            <div id="tr-today" style="font-size:36px;font-family:var(--mono);color:var(--teal);">0</div>
+            <div style="font-size:10px;color:var(--text2);margin-top:4px;letter-spacing:.1em;">STREAMS HEUTE</div>
+          </div>
+          <div class="scard" style="text-align:center;padding:16px;">
+            <div id="tr-peak" style="font-size:36px;font-family:var(--mono);color:var(--teal);">0</div>
+            <div style="font-size:10px;color:var(--text2);margin-top:4px;letter-spacing:.1em;">PEAK (SESSION)</div>
+          </div>
+        </div>
+
+        <!-- Live Sessions Detail -->
+        <div class="scard" style="margin-bottom:16px;">
+          <div class="scard-title">🔴 Live Streams</div>
+          <div id="tr-sessions-list" style="font-family:var(--mono);font-size:12px;">
+            <div class="empty-state">Keine aktiven Streams</div>
+          </div>
+        </div>
+
+        <!-- Traffic History Chart -->
+        <div class="scard">
+          <div class="scard-title">📈 Stream-Verlauf (letzte 60 Messungen)</div>
+          <canvas id="tr-chart" height="80" style="width:100%;"></canvas>
+          <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:10px;color:var(--text2);font-family:var(--mono);">
+            <span id="tr-chart-min">–– ago</span>
+            <span>Jetzt</span>
+          </div>
+        </div>
+      </div>
+
 <!-- Add User Modal -->
 <div class="modal-bg" id="modal-adduser">
   <div class="modal">
@@ -961,6 +1016,8 @@ function nav(page, el) {
   if(page==='logs') loadLogs();
   if(page==='settings') loadSettings();
   if(page==='vpn') loadVpnSettings();
+  if(page==='traffic') startTrafficMonitor();
+  if(page!=='traffic') stopTrafficMonitor();
 }
 
 // ── Stats ─────────────────────────────────────────────────────────────────────
@@ -1051,7 +1108,7 @@ async function loadStats() {
             return `<tr style="border-bottom:1px solid var(--border);">
               <td style="padding:6px 8px;font-family:var(--mono);font-size:10px;white-space:nowrap;color:var(--text2);">${dateStr} ${timeStr}</td>
               <td style="padding:6px 8px;font-size:12px;">${icon} <strong>${esc(l.user_name)}</strong></td>
-              <td style="padding:6px 8px;font-family:var(--mono);font-size:10px;color:var(--text2);">${esc(l.ip||'')}</td>
+              <td style="padding:6px 8px;font-family:var(--mono);font-size:10px;color:var(--text2);">${esc(l.ip_address||l.ip||'')}</td>
               <td style="padding:6px 8px;font-family:var(--mono);font-size:11px;color:var(--teal);">${esc(l.channel)}</td>
               <td style="padding:6px 8px;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${sendung}</td>
               <td style="padding:6px 8px;font-family:var(--mono);font-size:11px;text-align:right;color:var(--text2);">${dur}</td>
@@ -1871,7 +1928,7 @@ async function loadLogs() {
     return `<tr>
       <td style="font-family:var(--mono);font-size:10px;white-space:nowrap;">${fmtDate(l.started_at)}</td>
       <td><strong>${esc(l.user_name)}</strong></td>
-      <td style="font-family:var(--mono);font-size:10px;color:var(--text2);white-space:nowrap;">${esc(l.ip||'')}</td>
+      <td style="font-family:var(--mono);font-size:10px;color:var(--text2);white-space:nowrap;">${esc(l.ip_address||l.ip||'')}</td>
       <td style="white-space:nowrap;font-size:12px;">${icon}${esc(l.channel)}</td>
       <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${sendung}</td>
       <td style="font-family:var(--mono);font-size:11px;">${l.duration_seconds>0?fmtDur(l.duration_seconds):'—'}</td>
@@ -2333,13 +2390,124 @@ async function vpnRefreshStatus() {
   }
 }
 
-// Stop polling when leaving VPN page
-document.addEventListener('visibilitychange', () => {
-  if (document.hidden && _vpnStatusInterval) {
-    clearInterval(_vpnStatusInterval);
-    _vpnStatusInterval = null;
+// ── Traffic Monitor ───────────────────────────────────────────────────────────
+
+let _trafficInterval = null;
+let _trafficHistory = []; // [{time, streams, mbps}]
+let _trafficPeak = 0;
+const ASSUMED_MBPS_PER_STREAM = 6; // assume ~6 Mbit/s per HD stream
+
+function stopTrafficMonitor() {
+  if (_trafficInterval) { clearInterval(_trafficInterval); _trafficInterval = null; }
+}
+
+async function startTrafficMonitor() {
+  stopTrafficMonitor();
+  await updateTraffic();
+  const secs = parseInt(document.getElementById('traffic-interval')?.value || '5');
+  _trafficInterval = setInterval(updateTraffic, secs * 1000);
+}
+
+async function updateTraffic() {
+  const s = await api('GET', '/api/stats');
+  if (!s) return;
+
+  const activeStreams = (s.active_sessions || []).length;
+  const estimatedMbps = activeStreams * ASSUMED_MBPS_PER_STREAM;
+  if (activeStreams > _trafficPeak) _trafficPeak = activeStreams;
+
+  // Update counters
+  document.getElementById('tr-streams').textContent = activeStreams;
+  document.getElementById('tr-mbps').textContent = estimatedMbps;
+  document.getElementById('tr-today').textContent = s.watch_logs_today || 0;
+  document.getElementById('tr-peak').textContent = _trafficPeak;
+
+  // Update live sessions list
+  const list = document.getElementById('tr-sessions-list');
+  if (!s.active_sessions?.length) {
+    list.innerHTML = '<div class="empty-state">Keine aktiven Streams</div>';
+  } else {
+    list.innerHTML = s.active_sessions.map(sess => {
+      const np = sess.now_playing || {};
+      const dur = sess.started_at ? Math.floor(Date.now()/1000 - sess.started_at) : 0;
+      const durStr = dur > 3600 ? `${Math.floor(dur/3600)}h ${Math.floor((dur%3600)/60)}m`
+                   : dur > 60   ? `${Math.floor(dur/60)}m ${dur%60}s` : `${dur}s`;
+      return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);">
+        <div class="live-dot active" style="flex-shrink:0;"></div>
+        <strong style="min-width:120px;">${esc(sess.user)}</strong>
+        <span style="color:var(--text2);font-size:10px;min-width:90px;">${esc(sess.ip||'')}</span>
+        <span style="color:var(--teal);">${esc(sess.channel)}</span>
+        ${np.title ? `<span style="color:var(--text2);font-size:11px;">· ${esc(np.title)}</span>` : ''}
+        <span style="margin-left:auto;color:var(--text2);font-size:10px;white-space:nowrap;">~${ASSUMED_MBPS_PER_STREAM} Mbit/s · ${durStr}</span>
+      </div>`;
+    }).join('');
   }
-});
+
+  // Update history & chart
+  const now = new Date();
+  _trafficHistory.push({ time: now, streams: activeStreams, mbps: estimatedMbps });
+  if (_trafficHistory.length > 60) _trafficHistory.shift();
+  drawTrafficChart();
+}
+
+function drawTrafficChart() {
+  const canvas = document.getElementById('tr-chart');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  canvas.width = canvas.offsetWidth * window.devicePixelRatio || 800;
+  canvas.height = 80 * window.devicePixelRatio;
+  ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+  const W = canvas.offsetWidth, H = 80;
+
+  ctx.clearRect(0, 0, W, H);
+
+  const maxStreams = Math.max(4, ..._trafficHistory.map(p => p.streams));
+  const pts = _trafficHistory;
+  if (pts.length < 2) return;
+
+  // Draw grid lines
+  ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+  ctx.lineWidth = 1;
+  for (let i = 1; i <= 4; i++) {
+    const y = H - (i / 4) * H;
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+  }
+
+  // Draw filled area
+  const xStep = W / (pts.length - 1);
+  ctx.beginPath();
+  pts.forEach((p, i) => {
+    const x = i * xStep;
+    const y = H - (p.streams / maxStreams) * (H - 8);
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.lineTo((pts.length - 1) * xStep, H);
+  ctx.lineTo(0, H);
+  ctx.closePath();
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, 'rgba(0,229,200,0.4)');
+  grad.addColorStop(1, 'rgba(0,229,200,0.02)');
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // Draw line
+  ctx.beginPath();
+  ctx.strokeStyle = '#00e5c8';
+  ctx.lineWidth = 2;
+  pts.forEach((p, i) => {
+    const x = i * xStep;
+    const y = H - (p.streams / maxStreams) * (H - 8);
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  // Time label
+  if (pts.length > 1) {
+    const diffSec = Math.round((pts[pts.length-1].time - pts[0].time) / 1000);
+    document.getElementById('tr-chart-min').textContent =
+      diffSec > 60 ? `${Math.floor(diffSec/60)}m ago` : `${diffSec}s ago`;
+  }
+}
 
 </script>
 </body>
