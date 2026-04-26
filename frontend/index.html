@@ -703,6 +703,36 @@ tr:hover td{background:rgba(255,255,255,.02);}
             </div>
           </div>
 
+          <div class="scard" style="grid-column:1/-1">
+            <div class="scard-title">🚀 Speedtest</div>
+            <div class="form-hint" style="margin-bottom:12px;">
+              Misst die aktuelle Download-Geschwindigkeit – <span id="speedtest-vpn-hint">direkt oder über VPN je nach Status</span>.
+              Hilft zu berechnen wie viele User gleichzeitig streamen können.
+            </div>
+            <button class="btn primary" id="speedtest-btn" onclick="runSpeedtest()">▶ Speedtest starten</button>
+            <div id="speedtest-result" style="display:none;margin-top:16px;">
+              <div style="display:flex;align-items:flex-end;gap:6px;margin-bottom:8px;">
+                <span id="speedtest-mbps" style="font-size:48px;font-family:var(--mono);color:var(--teal);line-height:1;">–</span>
+                <span style="font-size:16px;color:var(--text2);margin-bottom:8px;">Mbit/s</span>
+              </div>
+              <div id="speedtest-detail" style="font-size:11px;color:var(--text2);font-family:var(--mono);margin-bottom:14px;"></div>
+              <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;" id="speedtest-streams">
+                <div class="scard" style="text-align:center;padding:12px;">
+                  <div style="font-size:22px;font-family:var(--mono);color:var(--teal);" id="st-hd">–</div>
+                  <div style="font-size:10px;color:var(--text2);margin-top:4px;">HD Streams (720p)<br>~4 Mbit/s</div>
+                </div>
+                <div class="scard" style="text-align:center;padding:12px;">
+                  <div style="font-size:22px;font-family:var(--mono);color:var(--teal);" id="st-fhd">–</div>
+                  <div style="font-size:10px;color:var(--text2);margin-top:4px;">Full HD Streams (1080p)<br>~8 Mbit/s</div>
+                </div>
+                <div class="scard" style="text-align:center;padding:12px;">
+                  <div style="font-size:22px;font-family:var(--mono);color:var(--teal);" id="st-4k">–</div>
+                  <div style="font-size:10px;color:var(--text2);margin-top:4px;">4K Streams<br>~25 Mbit/s</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
         </div>
       </div>
 
@@ -2152,6 +2182,38 @@ async function vpnStop() {
   showToast('⏹ VPN gestoppt');
   // Wait a moment for tun0 to disappear before checking status
   setTimeout(vpnRefreshStatus, 2000);
+}
+
+async function runSpeedtest() {
+  const btn = document.getElementById('speedtest-btn');
+  const result = document.getElementById('speedtest-result');
+  const mbpsEl = document.getElementById('speedtest-mbps');
+  const detailEl = document.getElementById('speedtest-detail');
+
+  btn.disabled = true;
+  btn.textContent = '⏳ Teste…';
+  mbpsEl.textContent = '…';
+  result.style.display = 'block';
+  detailEl.textContent = 'Verbinde mit Testserver…';
+
+  try {
+    const data = await api('GET', '/api/vpn/speedtest');
+    if (!data.ok) {
+      mbpsEl.textContent = '!';
+      detailEl.textContent = data.error || 'Fehler';
+    } else {
+      mbpsEl.textContent = data.mbps;
+      detailEl.textContent = `${data.mb_downloaded} MB in ${data.seconds}s heruntergeladen • ${data.via_vpn ? '🔒 via VPN' : '🌐 direkt'}`;
+      document.getElementById('st-hd').textContent  = data.streams.hd_720p   + 'x';
+      document.getElementById('st-fhd').textContent = data.streams.fhd_1080p + 'x';
+      document.getElementById('st-4k').textContent  = data.streams.uhd_4k    + 'x';
+    }
+  } catch(e) {
+    mbpsEl.textContent = '!';
+    detailEl.textContent = 'Fehler: ' + e;
+  }
+  btn.disabled = false;
+  btn.textContent = '▶ Speedtest starten';
 }
 
 async function vpnRefreshStatus() {
