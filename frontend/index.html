@@ -2150,7 +2150,8 @@ async function vpnStart() {
 async function vpnStop() {
   await api('POST', '/api/vpn/stop');
   showToast('⏹ VPN gestoppt');
-  vpnRefreshStatus();
+  // Wait a moment for tun0 to disappear before checking status
+  setTimeout(vpnRefreshStatus, 2000);
 }
 
 async function vpnRefreshStatus() {
