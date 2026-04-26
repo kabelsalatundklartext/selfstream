@@ -1885,18 +1885,29 @@ def vpn_stop() -> dict:
             pass
     _socks_process = None
 
-    if not vpn_is_running():
-        db.set_setting("vpn_enabled", "0")
-        return {"ok": True, "msg": "VPN war nicht aktiv"}
-    try:
-        _vpn_process.terminate()
-        _vpn_process.wait(timeout=10)
-    except Exception:
+    if _vpn_process is not None:
         try:
-            _vpn_process.kill()
+            _vpn_process.terminate()
+            _vpn_process.wait(timeout=10)
         except Exception:
-            pass
+            try:
+                _vpn_process.kill()
+            except Exception:
+                pass
     _vpn_process = None
+
+    # Wait for tun0 to disappear (max 5s)
+    import time
+    for _ in range(10):
+        try:
+            result = subprocess.run(["ip", "link", "show", "tun0"],
+                                    capture_output=True, timeout=2)
+            if result.returncode != 0:
+                break
+        except Exception:
+            break
+        time.sleep(0.5)
+
     _vpn_log_add("🔴 OpenVPN + SOCKS5 Proxy gestoppt.")
     db.set_setting("vpn_enabled", "0")
     return {"ok": True}
@@ -1908,7 +1919,7 @@ def get_vpn_settings(_=Depends(check_admin)):
     # List uploaded .ovpn files
     ovpn_files = []
     if os.path.exists(VPN_OVPN_DIR):
-        ovpn_files = [f for f in os.listdir(VPN_OVPN_DIR) if f.endswith(".ovpn")]
+        ovpn_files = [f for f in os.listdir(VPN_OVPN_DIR) if f.endswith(".ovpn") and f != "split.ovpn"]
     return {
         "vpn_enabled":  s.get("vpn_enabled", "0"),
         "vpn_user":     s.get("vpn_user", ""),
