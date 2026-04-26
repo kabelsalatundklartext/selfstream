@@ -2054,40 +2054,69 @@ async def vpn_speedtest(_=Depends(check_admin)):
             internet_result["server"] = url.split("/")[2]
             break
 
-    # ── Test 2: IPTV Provider Speed ────────────────────────────────────────
+    # ── Test 2: IPTV Provider Speed (parallel segments) ───────────────────
     iptv_result = {"ok": False, "error": "Kein IPTV-Kanal verfügbar"}
-    # Get a live channel URL from DB
-    channels = db.get_channels(enabled_only=True)
-    iptv_url = None
-    for ch in channels[:20]:
-        url = ch.get("stream_url", "")
-        if url and "m3u8" not in url and url.startswith("http"):
-            iptv_url = url
-            break
-    # Try to get a .ts segment from a m3u8 playlist
-    if not iptv_url:
-        for ch in channels[:10]:
-            url = ch.get("stream_url", "")
-            if url and "m3u8" in url:
-                try:
-                    async with make_iptv_client(timeout=httpx.Timeout(5, read=10), follow_redirects=True) as client:
-                        resp = await client.get(url)
-                        if resp.status_code == 200:
-                            for line in resp.text.splitlines():
-                                if line.strip() and not line.startswith("#") and ".ts" in line:
-                                    base = "/".join(url.split("/")[:-1])
-                                    iptv_url = line.strip() if line.startswith("http") else f"{base}/{line.strip()}"
-                                    break
-                except Exception:
-                    pass
-                if iptv_url:
-                    break
 
-    if iptv_url:
-        r = await measure_url(iptv_url, max_bytes=5_000_000, timeout_sec=8)
-        if r["ok"]:
-            iptv_result = r
-            iptv_result["server"] = iptv_url.split("/")[2]
+    # Collect up to 5 different channel segment URLs for parallel test
+    segment_urls = []
+    channels = db.get_channels(enabled_only=True)
+
+    for ch in channels[:30]:
+        if len(segment_urls) >= 5:
+            break
+        url = ch.get("stream_url", "")
+        if not url or not url.startswith("http"):
+            continue
+        try:
+            async with make_iptv_client(timeout=httpx.Timeout(4, read=8), follow_redirects=True) as client:
+                resp = await client.get(url)
+                if resp.status_code != 200:
+                    continue
+                seg_url = None
+                base = "/".join(url.split("/")[:-1])
+                for line in resp.text.splitlines():
+                    line = line.strip()
+                    if line and not line.startswith("#") and (".ts" in line or ".aac" in line):
+                        seg_url = line if line.startswith("http") else f"{base}/{line}"
+                        break
+                if seg_url:
+                    segment_urls.append(seg_url)
+        except Exception:
+            continue
+
+    if segment_urls:
+        import time
+        # Download all segments in parallel
+        async def fetch_seg(url: str) -> int:
+            try:
+                downloaded = 0
+                async with make_iptv_client(timeout=httpx.Timeout(4, read=10), follow_redirects=True) as client:
+                    async with client.stream("GET", url) as resp:
+                        if resp.status_code not in (200, 206):
+                            return 0
+                        async for chunk in resp.aiter_bytes(chunk_size=65536):
+                            downloaded += len(chunk)
+                return downloaded
+            except Exception:
+                return 0
+
+        start = time.monotonic()
+        results_parallel = await asyncio.gather(*[fetch_seg(u) for u in segment_urls])
+        elapsed = time.monotonic() - start
+        total_bytes = sum(results_parallel)
+
+        if elapsed > 0 and total_bytes > 10_000:
+            mbps = (total_bytes * 8) / (elapsed * 1_000_000)
+            iptv_result = {
+                "ok": True,
+                "mbps": round(mbps, 1),
+                "mb": round(total_bytes / 1_000_000, 2),
+                "seconds": round(elapsed, 2),
+                "server": segment_urls[0].split("/")[2] if segment_urls else "",
+                "parallel": len(segment_urls),
+            }
+        else:
+            iptv_result = {"ok": False, "error": "Zu wenig Daten von Segmenten"}
 
     # ── Bottleneck Analysis ────────────────────────────────────────────────
     bottleneck = None
