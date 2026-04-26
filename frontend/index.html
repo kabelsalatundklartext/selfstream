@@ -625,6 +625,16 @@ tr:hover td{background:rgba(255,255,255,.02);}
               <label class="form-label">Read Timeout (s)</label>
               <input class="form-input" type="number" id="cfg-rtimeout" value="30">
             </div>
+            <div class="form-group">
+              <label class="form-label">🗄️ Segment-Prefetch (Vorpuffer)</label>
+              <select class="form-select" id="cfg-prefetch">
+                <option value="0">0 – Deaktiviert (kein Vorpuffern)</option>
+                <option value="1">1 – 1 Segment voraus</option>
+                <option value="2" selected>2 – 2 Segmente voraus (Standard)</option>
+                <option value="3">3 – 3 Segmente voraus</option>
+              </select>
+              <div class="form-hint">Wie viele Segmente selfstream im Voraus lädt. Mehr = flüssiger aber mehr RAM/CPU. Bei Lag: auf 0 oder 1 reduzieren.</div>
+            </div>
             <button class="btn primary" onclick="saveHls()">Speichern</button>
           </div>
 
@@ -1995,6 +2005,7 @@ async function loadSettings() {
   document.getElementById('cfg-ref').value=s.hls_referer||'';
   document.getElementById('cfg-timeout').value=s.hls_timeout||'10';
   document.getElementById('cfg-rtimeout').value=s.hls_read_timeout||'30';
+  document.getElementById('cfg-prefetch').value=s.prefetch_segments||'2';
   const refreshSel=document.getElementById('cfg-m3u-refresh');
   if(refreshSel) refreshSel.value=s.m3u_refresh_hours||'0';
   const lastEl=document.getElementById('cfg-m3u-last-refresh');
@@ -2024,7 +2035,8 @@ async function saveHls() {
     hls_user_agent:document.getElementById('cfg-ua').value.trim(),
     hls_referer:document.getElementById('cfg-ref').value.trim(),
     hls_timeout:document.getElementById('cfg-timeout').value,
-    hls_read_timeout:document.getElementById('cfg-rtimeout').value
+    hls_read_timeout:document.getElementById('cfg-rtimeout').value,
+    prefetch_segments:document.getElementById('cfg-prefetch').value
   });
   showToast('HLS-Einstellungen gespeichert');
 }
