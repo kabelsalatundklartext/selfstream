@@ -1905,6 +1905,9 @@ def vpn_start() -> dict:
 
 def vpn_stop() -> dict:
     global _vpn_process, _socks_process
+    # Set DB flag FIRST to prevent auto-restart
+    db.set_setting("vpn_enabled", "0")
+
     # Stop SOCKS proxy
     if _socks_process is not None and _socks_process.poll() is None:
         try:
@@ -1925,20 +1928,25 @@ def vpn_stop() -> dict:
                 pass
     _vpn_process = None
 
-    # Wait for tun0 to disappear (max 5s)
+    # Kill any remaining openvpn processes
+    try:
+        subprocess.run(["pkill", "-f", "openvpn"], capture_output=True, timeout=3)
+    except Exception:
+        pass
+
+    # Wait for tun interfaces to disappear (max 5s)
     import time
     for _ in range(10):
         try:
-            result = subprocess.run(["ip", "link", "show", "tun0"],
-                                    capture_output=True, timeout=2)
-            if result.returncode != 0:
+            result = subprocess.run(["ip", "link", "show"],
+                                    capture_output=True, text=True, timeout=2)
+            if "tun" not in result.stdout:
                 break
         except Exception:
             break
         time.sleep(0.5)
 
     _vpn_log_add("🔴 OpenVPN + SOCKS5 Proxy gestoppt.")
-    db.set_setting("vpn_enabled", "0")
     return {"ok": True}
 
 
